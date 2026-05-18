@@ -218,6 +218,7 @@ def prepare_then_and_now_notification(
     messages: list,
     test_mode: bool,
     logger=None,
+    title_templates: list = None,
 ) -> Optional[dict]:
     """
     Fetch preview thumbnails, compose a high-res split image, upload it to the
@@ -255,12 +256,19 @@ def prepare_then_and_now_notification(
         template = random.choice(messages)
         try:
             message = template.format(person_name=person_name, then_year=then_year, now_year=now_year, gap=gap)
-        except KeyError:
+        except (KeyError, ValueError, IndexError):
             message = f"{gap} years between these moments with {person_name}"
     else:
         message = f"{gap} years between these moments with {person_name}"
 
-    title = f"Then & Now — {person_name}"
+    if title_templates:
+        title_template = random.choice(title_templates)
+        try:
+            title = title_template.format(person_name=person_name, then_year=then_year, now_year=now_year, gap=gap)
+        except (KeyError, ValueError, IndexError):
+            title = f"Then & Now — {person_name}"
+    else:
+        title = f"Then & Now — {person_name}"
     if test_mode:
         title = "[TEST] " + title
 

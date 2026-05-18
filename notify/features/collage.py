@@ -120,11 +120,17 @@ def load_custom_templates(templates_dir: str = "custom_templates"):
 
     for template_file in templates_path.glob("*.py"):
         template_name = template_file.stem
+        if not template_name.replace("_", "").replace("-", "").isalnum():
+            logging.getLogger("immich-memories-notify").warning(
+                f"Skipping template with invalid name: {template_name}"
+            )
+            continue
         try:
-            # Load module from file
-            spec = importlib.util.spec_from_file_location(template_name, template_file)
+            # Load module from file with namespaced key to prevent stdlib shadowing
+            module_key = f"memnotify_template.{template_name}"
+            spec = importlib.util.spec_from_file_location(module_key, template_file)
             module = importlib.util.module_from_spec(spec)
-            sys.modules[template_name] = module
+            sys.modules[module_key] = module
             spec.loader.exec_module(module)
 
             # Get render function
@@ -287,7 +293,15 @@ def generate_weekly_collage(
         if len(person_names) > 3:
             names_str += f" +{len(person_names) - 3} more"
 
-        title = "Weekly Highlights"
+        title_templates = config.get("collage_titles", [])
+        if title_templates:
+            title_template = random.choice(title_templates)
+            try:
+                title = title_template.format(names=names_str)
+            except (KeyError, ValueError, IndexError):
+                title = "Weekly Highlights"
+        else:
+            title = "Weekly Highlights"
         if test_mode:
             title = "[TEST] " + title
 

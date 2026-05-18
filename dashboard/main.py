@@ -4,6 +4,7 @@ Immich Memories Notify - Dashboard
 FastAPI web dashboard for managing notifications.
 """
 
+import logging
 import os
 import secrets as stdlib_secrets
 from pathlib import Path
@@ -22,11 +23,15 @@ STATE_PATH = os.environ.get("STATE_PATH", "/app/state/state.json")
 DASHBOARD_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
 DASHBOARD_USER = os.environ.get("DASHBOARD_USER", "admin")
 
+# Read version from VERSION file
+_version_file = Path(__file__).parent.parent / "VERSION"
+APP_VERSION = _version_file.read_text().strip() if _version_file.exists() else "1.0.0"
+
 # Create FastAPI app
 app = FastAPI(
     title="Immich Memories Notify Dashboard",
     description="Web dashboard for managing Immich memory notifications",
-    version="1.0.0",
+    version=APP_VERSION,
 )
 
 # Security - auto_error=False allows unauthenticated requests when no token is configured
@@ -109,7 +114,7 @@ app.include_router(
 @app.get("/health", response_model=HealthResponse, tags=["health"])
 async def health_check():
     """Health check endpoint."""
-    return HealthResponse(status="healthy", version="1.0.0")
+    return HealthResponse(status="healthy", version=APP_VERSION)
 
 
 # Dashboard UI
@@ -128,6 +133,10 @@ async def startup_event():
     """Initialize app state."""
     app.state.config_path = CONFIG_PATH
     app.state.state_path = STATE_PATH
+    if not DASHBOARD_TOKEN:
+        logging.getLogger("dashboard").warning(
+            "DASHBOARD_TOKEN is not set — dashboard is running without authentication"
+        )
 
 
 if __name__ == "__main__":

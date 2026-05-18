@@ -19,6 +19,7 @@ def prepare_person_notification(
     logger: logging.Logger,
     settings: dict = None,
     video_person_messages: list = None,
+    title_templates: list = None,
 ) -> Optional[dict]:
     """Prepare a random person photo notification."""
     if not top_persons:
@@ -89,7 +90,7 @@ def prepare_person_notification(
     # Safely format message
     try:
         message = message_template.format(**format_kwargs)
-    except KeyError:
+    except (KeyError, ValueError, IndexError):
         message = message_template.format(person_name=person_name)
 
     # Append location context if available (33% chance)
@@ -100,12 +101,18 @@ def prepare_person_notification(
     if album_name and album_name not in message and random.random() < 0.33:
         message = f"{message}\n📁 {album_name}"
 
-    # Build title
+    # Build title from template
     video_emoji = settings.get("video_emoji", False)
-    if is_video and video_emoji:
-        title = f"\U0001F3AC A memory with {person_name}"
+    if title_templates:
+        title_template = random.choice(title_templates)
+        try:
+            title = title_template.format(person_name=person_name)
+        except (KeyError, ValueError, IndexError):
+            title = f"A memory with {person_name}"
     else:
         title = f"A memory with {person_name}"
+    if is_video and video_emoji:
+        title = f"\U0001F3AC {title}"
 
     if test_mode:
         title = "[TEST] " + title

@@ -17,32 +17,32 @@ class NotificationWindow(BaseModel):
 
 class Settings(BaseModel):
     retry: RetrySettings = Field(default_factory=RetrySettings)
-    state_file: str = "state/state.json"
-    log_level: str = "INFO"
-    memory_notifications: int = 3
-    person_notifications: int = 2
-    fallback_notifications: int = 3
-    top_persons_limit: int = 5
-    exclude_recent_days: int = 30
+    state_file: str = Field("state/state.json", max_length=256)
+    log_level: str = Field("INFO", max_length=10)
+    memory_notifications: int = Field(3, ge=0, le=20)
+    person_notifications: int = Field(2, ge=0, le=20)
+    fallback_notifications: int = Field(3, ge=0, le=20)
+    top_persons_limit: int = Field(5, ge=1, le=50)
+    exclude_recent_days: int = Field(30, ge=0, le=3650)
     include_location: bool = True
     include_album: bool = True
     video_emoji: bool = True
     prefer_group_photos: bool = True
-    min_group_size: int = 2
-    year_range: int = 5
+    min_group_size: int = Field(2, ge=1, le=20)
+    year_range: int = Field(5, ge=1, le=50)
     notification_windows: List[NotificationWindow] = Field(default_factory=list)
     weekly_collage_enabled: bool = False
-    weekly_collage_day: int = 6  # Saturday (0=Sunday, 6=Saturday)
-    weekly_collage_slots: int = 1
-    collage_person_limit: int = 5
-    collage_template: str = "grid"
-    collage_album_name: str = "Weekly Highlights"
+    weekly_collage_day: int = Field(6, ge=0, le=6)
+    weekly_collage_slots: int = Field(1, ge=1, le=10)
+    collage_person_limit: int = Field(5, ge=1, le=20)
+    collage_template: str = Field("grid", max_length=64)
+    collage_album_name: str = Field("Weekly Highlights", max_length=128)
     then_and_now_enabled: bool = True
-    then_and_now_cooldown_days: int = 7
-    then_and_now_min_gap: int = 3
+    then_and_now_cooldown_days: int = Field(7, ge=0, le=365)
+    then_and_now_min_gap: int = Field(3, ge=1, le=50)
     trip_highlights_enabled: bool = True
-    trip_highlights_cooldown_days: int = 7
-    trip_highlights_min_photos: int = 5
+    trip_highlights_cooldown_days: int = Field(7, ge=0, le=365)
+    trip_highlights_min_photos: int = Field(5, ge=1, le=100)
 
 
 class UserInfo(BaseModel):
@@ -63,6 +63,11 @@ class FullConfig(BaseModel):
     video_person_messages: List[str]
     then_and_now_messages: List[str]
     trip_highlights_messages: List[str]
+    memory_titles: List[str]
+    person_titles: List[str]
+    collage_titles: List[str]
+    then_and_now_titles: List[str]
+    trip_highlights_titles: List[str]
 
 
 # Update Models
@@ -77,33 +82,38 @@ class MessagesUpdate(BaseModel):
     video_person_messages: Optional[List[str]] = None
     then_and_now_messages: Optional[List[str]] = None
     trip_highlights_messages: Optional[List[str]] = None
+    memory_titles: Optional[List[str]] = None
+    person_titles: Optional[List[str]] = None
+    collage_titles: Optional[List[str]] = None
+    then_and_now_titles: Optional[List[str]] = None
+    trip_highlights_titles: Optional[List[str]] = None
 
 
 class SettingsUpdate(BaseModel):
     """Partial settings update."""
-    memory_notifications: Optional[int] = None
-    person_notifications: Optional[int] = None
-    fallback_notifications: Optional[int] = None
-    top_persons_limit: Optional[int] = None
-    exclude_recent_days: Optional[int] = None
+    memory_notifications: Optional[int] = Field(None, ge=0, le=20)
+    person_notifications: Optional[int] = Field(None, ge=0, le=20)
+    fallback_notifications: Optional[int] = Field(None, ge=0, le=20)
+    top_persons_limit: Optional[int] = Field(None, ge=1, le=50)
+    exclude_recent_days: Optional[int] = Field(None, ge=0, le=3650)
     include_location: Optional[bool] = None
     include_album: Optional[bool] = None
     video_emoji: Optional[bool] = None
     prefer_group_photos: Optional[bool] = None
-    min_group_size: Optional[int] = None
-    year_range: Optional[int] = None
+    min_group_size: Optional[int] = Field(None, ge=1, le=20)
+    year_range: Optional[int] = Field(None, ge=1, le=50)
     weekly_collage_enabled: Optional[bool] = None
-    weekly_collage_day: Optional[int] = None
-    weekly_collage_slots: Optional[int] = None
-    collage_person_limit: Optional[int] = None
-    collage_template: Optional[str] = None
-    collage_album_name: Optional[str] = None
+    weekly_collage_day: Optional[int] = Field(None, ge=0, le=6)
+    weekly_collage_slots: Optional[int] = Field(None, ge=1, le=10)
+    collage_person_limit: Optional[int] = Field(None, ge=1, le=20)
+    collage_template: Optional[str] = Field(None, max_length=64)
+    collage_album_name: Optional[str] = Field(None, max_length=128)
     then_and_now_enabled: Optional[bool] = None
-    then_and_now_cooldown_days: Optional[int] = None
-    then_and_now_min_gap: Optional[int] = None
+    then_and_now_cooldown_days: Optional[int] = Field(None, ge=0, le=365)
+    then_and_now_min_gap: Optional[int] = Field(None, ge=1, le=50)
     trip_highlights_enabled: Optional[bool] = None
-    trip_highlights_cooldown_days: Optional[int] = None
-    trip_highlights_min_photos: Optional[int] = None
+    trip_highlights_cooldown_days: Optional[int] = Field(None, ge=0, le=365)
+    trip_highlights_min_photos: Optional[int] = Field(None, ge=1, le=100)
 
 
 class UserEnabledUpdate(BaseModel):
@@ -132,4 +142,4 @@ class TestTriggerResponse(BaseModel):
 # Health Model
 class HealthResponse(BaseModel):
     status: str
-    version: str = "1.0.0"
+    version: str

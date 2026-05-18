@@ -84,11 +84,13 @@ async def create_ntfy_user(req: NtfyCreateUserRequest):
     if not req.username or not req.password:
         raise HTTPException(status_code=400, detail="username and password are required")
 
-    # Sanitize inputs — no shell injection
+    # Sanitize inputs
     safe_username = req.username.strip()
     safe_topic = req.topic.strip() or "*"
     if not safe_username.replace("-", "").replace("_", "").isalnum():
         raise HTTPException(status_code=400, detail="username may only contain letters, numbers, hyphens, and underscores")
+    if safe_topic != "*" and not safe_topic.replace("-", "").replace("_", "").isalnum():
+        raise HTTPException(status_code=400, detail="topic may only contain letters, numbers, hyphens, and underscores (or '*' for all)")
 
     commands_run = []
     output_lines = []

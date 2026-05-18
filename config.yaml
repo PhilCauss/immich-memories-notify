@@ -89,3 +89,13 @@ trip_highlights_messages:
 - '{city}, {country} — {gap} years have passed'
 - Flashback to {city}, {year} \u2708\ufe0f
 - What a trip! {city}, {country} — {year}
+memory_titles:
+- '{years_ago} years ago today'
+person_titles:
+- 'A memory with {person_name}'
+collage_titles:
+- 'Weekly Highlights'
+then_and_now_titles:
+- 'Then & Now — {person_name}'
+trip_highlights_titles:
+- 'Trip Highlights'

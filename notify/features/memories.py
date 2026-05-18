@@ -22,6 +22,7 @@ def prepare_memory_notification(
     settings: dict = None,
     video_messages: list = None,
     target_date: date = None,
+    title_templates: list = None,
 ) -> Optional[dict]:
     """Prepare a memory notification for a specific slot, preferring faces."""
     years = parsed["years"]
@@ -111,8 +112,7 @@ def prepare_memory_notification(
     # Safely format message (ignore missing placeholders)
     try:
         message = message_template.format(**format_kwargs)
-    except KeyError:
-        # Fallback if template has unknown placeholders
+    except (KeyError, ValueError, IndexError):
         message = message_template.format(year=year, years_ago=years_ago)
 
     # Append location context if available (33% chance)
@@ -123,12 +123,18 @@ def prepare_memory_notification(
     if album_name and album_name not in message and random.random() < 0.33:
         message = f"{message}\n📁 {album_name}"
 
-    # Build title
+    # Build title from template
     video_emoji = settings.get("video_emoji", False)
-    if is_video and video_emoji:
-        title = f"\U0001F3AC Memories from {year}"
+    if title_templates:
+        title_template = random.choice(title_templates)
+        try:
+            title = title_template.format(year=year, years_ago=years_ago)
+        except (KeyError, ValueError, IndexError):
+            title = f"Memories from {year}"
     else:
         title = f"Memories from {year}"
+    if is_video and video_emoji:
+        title = f"\U0001F3AC {title}"
 
     if test_mode:
         title = "[TEST] " + title

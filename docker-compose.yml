@@ -34,6 +34,7 @@ services:
     volumes:
       - ./notify:/app/notify:ro
       - ./config.yaml:/app/config.yaml:ro
+      - ./VERSION:/app/VERSION:ro
       - ./state:/app/state
       - ./custom_templates:/app/custom_templates
       - /etc/localtime:/etc/localtime:ro
@@ -52,6 +53,7 @@ services:
     volumes:
       - ./notify:/app/notify:ro
       - ./config.yaml:/app/config.yaml:ro
+      - ./VERSION:/app/VERSION:ro
       - ./state:/app/state
       - ./custom_templates:/app/custom_templates
       - /etc/localtime:/etc/localtime:ro
@@ -90,6 +92,7 @@ services:
                 h, m = start.split(':')
                 cron = f'{int(m)} {int(h)} * * *'
                 f.write(f'{cron} cd /app && python -m notify --slot {i} >> /proc/1/fd/1 2>&1\n')
+            f.write('0 6 * * * cd /app && python -m notify --check-updates >> /proc/1/fd/1 2>&1\n')
         "
         echo "Starting scheduler..."
         crond -f -l 2
@@ -120,6 +123,7 @@ services:
       - STATE_PATH=/app/state/state.json
       - ENV_PATH=/app/.env
       - PROJECT_DIR=/app/project
+      - COMPOSE_PROJECT_NAME=memnotify
       - DASHBOARD_USER=${DASHBOARD_USER:-admin}
       - DASHBOARD_TOKEN=${DASHBOARD_TOKEN:-}
       - DOCKER_API_VERSION=${DOCKER_API_VERSION:-}

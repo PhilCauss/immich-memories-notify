@@ -5,6 +5,9 @@
 # State directory
 state/
 
+# Lock files
+*.lock
+
 # Python cache
 __pycache__/
 *.py[cod]

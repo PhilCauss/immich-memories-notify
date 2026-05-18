@@ -106,7 +106,7 @@ def load_config(config_path: str = "config.yaml") -> dict:
 # =============================================================================
 
 def load_state(state_file: str) -> dict:
-    """Load state from JSON file."""
+    """Load state from JSON file with shared lock."""
     path = Path(state_file)
     if path.is_dir():
         raise RuntimeError(
@@ -114,10 +114,22 @@ def load_state(state_file: str) -> dict:
             f"Fix: on the host run:  rm -rf {path} && mkdir -p {path.parent}"
         )
     if path.exists():
+        lock_path = Path(str(path) + ".lock")
         try:
-            with open(path) as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError):
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(lock_path, "w") as lock_f:
+                fcntl.flock(lock_f, fcntl.LOCK_SH)
+                try:
+                    with open(path) as f:
+                        return json.load(f)
+                finally:
+                    fcntl.flock(lock_f, fcntl.LOCK_UN)
+        except json.JSONDecodeError:
+            logging.getLogger("immich-memories-notify").warning(
+                f"State file {path} is corrupted — starting with empty state"
+            )
+            return {}
+        except IOError:
             return {}
     return {}
 

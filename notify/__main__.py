@@ -4,11 +4,10 @@ Immich Memories Notify
 Sends daily memory notifications to all configured users.
 
 Usage:
-    python -m notify                 # Send notifications for today
-    python -m notify --test          # Test mode (uses any available date)
-    python -m notify --dry-run       # Show what would be sent without sending
-    python -m notify --force         # Force send even if already sent today
-    python -m notify --config FILE   # Use custom config file
+    python -m notify --slot 1        # Send notifications for slot 1
+    python -m notify --slot 1 --test # Test mode (uses any available date)
+    python -m notify --slot 1 --dry-run # Show what would be sent without sending
+    python -m notify --check-updates # Check GitHub for new releases
 """
 
 import argparse
@@ -94,6 +93,8 @@ def process_user_slot(
     person_messages = config.get("person_messages", [])
     video_messages = config.get("video_messages", [])
     video_person_messages = config.get("video_person_messages", [])
+    memory_titles = config.get("memory_titles", [])
+    person_titles = config.get("person_titles", [])
     settings = config["settings"]
 
     memory_notifications = settings.get("memory_notifications", 3)
@@ -170,6 +171,8 @@ def process_user_slot(
             tan_min_gap = settings.get("then_and_now_min_gap", 3)
             tan_messages = config.get("then_and_now_messages", [])
             trip_messages = config.get("trip_highlights_messages", [])
+            tan_titles = config.get("then_and_now_titles", [])
+            trip_titles = config.get("trip_highlights_titles", [])
             home_city = user.get("home_city", "")
             trip_min_photos = settings.get("trip_highlights_min_photos", 5)
             year_range = settings.get("year_range", 5)
@@ -226,6 +229,7 @@ def process_user_slot(
                                 messages=trip_messages,
                                 test_mode=test_mode,
                                 logger=logger,
+                                title_templates=trip_titles,
                             )
                             if notification:
                                 logger.info(f"  [{name}] Sending Trip Highlights "
@@ -254,6 +258,7 @@ def process_user_slot(
                                 messages=tan_messages,
                                 test_mode=test_mode,
                                 logger=logger,
+                                title_templates=tan_titles,
                             )
                             if notification:
                                 logger.info(f"  [{name}] Sending Then & Now ({candidate['then_year']} → {candidate['now_year']})")
@@ -275,6 +280,7 @@ def process_user_slot(
                     settings=settings,
                     video_messages=video_messages,
                     target_date=target_date,
+                    title_templates=memory_titles,
                 )
         elif slot <= total_slots:
             # Send a person photo notification
@@ -289,6 +295,7 @@ def process_user_slot(
                 logger=logger,
                 settings=settings,
                 video_person_messages=video_person_messages,
+                title_templates=person_titles,
             )
         else:
             logger.info(f"  [{name}] Slot {slot} exceeds configured slots ({total_slots}), skipping")
@@ -307,6 +314,7 @@ def process_user_slot(
                 logger=logger,
                 settings=settings,
                 video_person_messages=video_person_messages,
+                title_templates=person_titles,
             )
         else:
             logger.info(f"  [{name}] Slot {slot} exceeds fallback slots ({fallback_notifications}), skipping")
@@ -361,6 +369,7 @@ def process_user_slot(
                 person_id = notification.get("person_id", "")
                 if person_id:
                     used.append(person_id)
+                    user_state["tan_persons_used"] = used[-20:]
     else:
         result["success"] = False
 
@@ -381,13 +390,23 @@ Examples:
         """,
     )
     parser.add_argument("--config", default="config.yaml", help="Path to config file")
-    parser.add_argument("--slot", type=int, required=True, help="Notification slot number (1, 2, 3, ...)")
+    parser.add_argument("--slot", type=int, help="Notification slot number (1, 2, 3, ...)")
+    parser.add_argument("--check-updates", action="store_true", help="Check for new releases on GitHub")
     parser.add_argument("--test", action="store_true", help="Test mode (minimal delays, use any date)")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be sent")
     parser.add_argument("--force", action="store_true", help="Force send even if already sent today")
     parser.add_argument("--no-delay", action="store_true", help="Skip random delay, send immediately")
     parser.add_argument("--date", help="Specific date to check (YYYY-MM-DD)")
     args = parser.parse_args()
+
+    if args.check_updates:
+        from .update_check import check_for_updates
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+        logger = logging.getLogger("immich-memories-notify")
+        return check_for_updates(config_path=args.config, logger=logger)
+
+    if not args.slot:
+        parser.error("--slot is required (unless using --check-updates)")
 
     # Load config first to get log settings
     try:

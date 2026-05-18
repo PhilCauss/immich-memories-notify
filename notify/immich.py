@@ -136,6 +136,9 @@ def format_person_notification(
     }
 
 
+MAX_THUMBNAIL_BYTES = 20 * 1024 * 1024  # 20 MB
+
+
 def fetch_thumbnail(immich_url: str, api_key: str, asset_id: str, timeout: int = 30, size: str = "thumbnail") -> bytes:
     """Fetch thumbnail/preview image from Immich.
 
@@ -144,9 +147,16 @@ def fetch_thumbnail(immich_url: str, api_key: str, asset_id: str, timeout: int =
     """
     headers = {"x-api-key": api_key}
     url = f"{immich_url}/api/assets/{asset_id}/thumbnail"
-    response = requests.get(url, headers=headers, params={"size": size}, timeout=timeout)
+    response = requests.get(url, headers=headers, params={"size": size}, timeout=timeout, stream=True)
     response.raise_for_status()
-    return response.content
+    content_length = int(response.headers.get("content-length", 0))
+    if content_length > MAX_THUMBNAIL_BYTES:
+        response.close()
+        raise ValueError(f"Thumbnail too large: {content_length} bytes")
+    data = response.content
+    if len(data) > MAX_THUMBNAIL_BYTES:
+        raise ValueError(f"Thumbnail too large: {len(data)} bytes")
+    return data
 
 
 # =============================================================================
@@ -360,7 +370,7 @@ def fetch_asset_details(immich_url: str, api_key: str, asset_id: str, timeout: i
     Fetch full asset details including exifInfo, albums, and people.
     Results are cached for the session to avoid repeated API calls.
     """
-    cache_key = f"{immich_url}:{asset_id}"
+    cache_key = f"{immich_url}:{api_key[:8]}:{asset_id}"
     if cache_key in _asset_details_cache:
         return _asset_details_cache[cache_key]
 

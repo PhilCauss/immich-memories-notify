@@ -58,7 +58,7 @@ prompt() {
     if [ -z "$input" ] && [ -n "$default" ]; then
         input="$default"
     fi
-    eval "$var_name='$input'"
+    printf -v "$var_name" '%s' "$input"
 }
 
 prompt_yn() {
@@ -76,9 +76,9 @@ prompt_yn() {
     read -r input
     input="${input:-$default}"
     if [[ "$input" =~ ^[Yy] ]]; then
-        eval "$var_name=y"
+        printf -v "$var_name" '%s' "y"
     else
-        eval "$var_name=n"
+        printf -v "$var_name" '%s' "n"
     fi
 }
 
@@ -303,7 +303,8 @@ DOCKER_API_VERSION=${_SERVER_API}
 # Set to true once initial setup is complete (wizard won't reappear)
 SETUP_COMPLETE=false
 EOF
-    print_ok ".env created"
+    chmod 600 "$ENV_FILE"
+    print_ok ".env created (permissions: 600)"
 fi
 
 # --- docker-compose.override.yml (if bundled ntfy) ----------

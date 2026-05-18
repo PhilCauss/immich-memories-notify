@@ -23,9 +23,9 @@ class RestartResponse(BaseModel):
 def docker_compose_restart(services: List[str]) -> dict:
     """Restart Docker Compose services."""
     try:
-        # Use docker compose restart from project directory
         project_dir = os.environ.get("PROJECT_DIR", "/app/project")
-        cmd = ["docker", "compose", "restart"] + services
+        project_name = os.environ.get("COMPOSE_PROJECT_NAME", "memnotify")
+        cmd = ["docker", "compose", "-p", project_name, "restart"] + services
         result = subprocess.run(
             cmd,
             capture_output=True,

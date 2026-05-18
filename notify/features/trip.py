@@ -161,6 +161,7 @@ def prepare_trip_notification(
     messages: list,
     test_mode: bool,
     logger=None,
+    title_templates: list = None,
 ) -> Optional[dict]:
     """
     Build a collage from up to 4 trip photos, upload to a per-trip album, and
@@ -231,12 +232,19 @@ def prepare_trip_notification(
         template = random.choice(messages)
         try:
             message = template.format(city=city, country=country, year=year, gap=gap)
-        except KeyError:
+        except (KeyError, ValueError, IndexError):
             message = f"{gap} years ago in {city}, {country}!"
     else:
         message = f"{gap} years ago in {city}, {country}!"
 
-    title = f"Trip to {city} \U0001f30d"
+    if title_templates:
+        title_template = random.choice(title_templates)
+        try:
+            title = title_template.format(city=city, country=country, year=year, gap=gap)
+        except (KeyError, ValueError, IndexError):
+            title = f"Trip to {city} \U0001f30d"
+    else:
+        title = f"Trip to {city} \U0001f30d"
     if test_mode:
         title = "[TEST] " + title
 

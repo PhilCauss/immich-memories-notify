@@ -8,8 +8,8 @@ from typing import List
 
 import requests as http_requests
 import yaml
-from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from ..models import (
     FullConfig,
@@ -21,7 +21,8 @@ from ..models import (
     MessagesUpdate,
     UserEnabledUpdate,
 )
-from ..utils.filelock import read_lock, write_lock
+from ..utils.filelock import exclusive_lock, read_lock, write_lock
+from .restart import docker_compose_restart
 
 router = APIRouter()
 
@@ -32,17 +33,38 @@ def get_config_path(request: Request) -> str:
 
 
 def load_config(config_path: str) -> dict:
-    """Load configuration from YAML file."""
+    """Load configuration from YAML file (shared lock)."""
     with read_lock(config_path):
         with open(config_path) as f:
             return yaml.safe_load(f)
 
 
 def save_config(config_path: str, config: dict):
-    """Save configuration to YAML file."""
+    """Save configuration to YAML file (exclusive lock)."""
     with write_lock(config_path):
         with open(config_path, 'w') as f:
             yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+
+def load_config_exclusive(config_path: str) -> tuple:
+    """Load config under exclusive lock for read-modify-write. Returns (config, lock_context).
+
+    Usage:
+        with exclusive_lock(config_path):
+            config = _read_yaml(config_path)
+            # modify config...
+            _write_yaml(config_path, config)
+    """
+    with open(config_path) as f:
+        return yaml.safe_load(f)
+
+
+def _write_yaml(config_path: str, config: dict):
+    """Write config without acquiring a new lock (caller holds exclusive_lock)."""
+    with open(config_path, 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        f.flush()
+        os.fsync(f.fileno())
 
 
 @router.get("/", response_model=FullConfig)
@@ -112,6 +134,11 @@ async def get_settings(request: Request):
         video_person_messages=config.get("video_person_messages", []),
         then_and_now_messages=config.get("then_and_now_messages", []),
         trip_highlights_messages=config.get("trip_highlights_messages", []),
+        memory_titles=config.get("memory_titles", []),
+        person_titles=config.get("person_titles", []),
+        collage_titles=config.get("collage_titles", []),
+        then_and_now_titles=config.get("then_and_now_titles", []),
+        trip_highlights_titles=config.get("trip_highlights_titles", []),
     )
 
 
@@ -130,24 +157,25 @@ async def get_windows(request: Request):
 
 
 @router.put("/windows")
-async def update_windows(request: Request, update: WindowsUpdate):
+async def update_windows(request: Request, update: WindowsUpdate, background_tasks: BackgroundTasks):
     """Update notification windows."""
     config_path = get_config_path(request)
 
     try:
-        config = load_config(config_path)
+        with exclusive_lock(config_path):
+            config = load_config_exclusive(config_path)
+            if "settings" not in config:
+                config["settings"] = {}
+            config["settings"]["notification_windows"] = [
+                {"start": w.start, "end": w.end} for w in update.notification_windows
+            ]
+            _write_yaml(config_path, config)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Config file not found")
 
-    if "settings" not in config:
-        config["settings"] = {}
+    background_tasks.add_task(docker_compose_restart, ["scheduler"])
 
-    config["settings"]["notification_windows"] = [
-        {"start": w.start, "end": w.end} for w in update.notification_windows
-    ]
-
-    save_config(config_path, config)
-    return {"message": "Windows updated", "count": len(update.notification_windows)}
+    return {"message": "Windows updated, scheduler restarting", "count": len(update.notification_windows)}
 
 
 @router.get("/messages")
@@ -167,6 +195,11 @@ async def get_messages(request: Request):
         "video_person_messages": config.get("video_person_messages", []),
         "then_and_now_messages": config.get("then_and_now_messages", []),
         "trip_highlights_messages": config.get("trip_highlights_messages", []),
+        "memory_titles": config.get("memory_titles", []),
+        "person_titles": config.get("person_titles", []),
+        "collage_titles": config.get("collage_titles", []),
+        "then_and_now_titles": config.get("then_and_now_titles", []),
+        "trip_highlights_titles": config.get("trip_highlights_titles", []),
     }
 
 
@@ -176,24 +209,34 @@ async def update_messages(request: Request, update: MessagesUpdate):
     config_path = get_config_path(request)
 
     try:
-        config = load_config(config_path)
+        with exclusive_lock(config_path):
+            config = load_config_exclusive(config_path)
+            if update.messages is not None:
+                config["messages"] = update.messages
+            if update.person_messages is not None:
+                config["person_messages"] = update.person_messages
+            if update.video_messages is not None:
+                config["video_messages"] = update.video_messages
+            if update.video_person_messages is not None:
+                config["video_person_messages"] = update.video_person_messages
+            if update.then_and_now_messages is not None:
+                config["then_and_now_messages"] = update.then_and_now_messages
+            if update.trip_highlights_messages is not None:
+                config["trip_highlights_messages"] = update.trip_highlights_messages
+            if update.memory_titles is not None:
+                config["memory_titles"] = update.memory_titles
+            if update.person_titles is not None:
+                config["person_titles"] = update.person_titles
+            if update.collage_titles is not None:
+                config["collage_titles"] = update.collage_titles
+            if update.then_and_now_titles is not None:
+                config["then_and_now_titles"] = update.then_and_now_titles
+            if update.trip_highlights_titles is not None:
+                config["trip_highlights_titles"] = update.trip_highlights_titles
+            _write_yaml(config_path, config)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Config file not found")
 
-    if update.messages is not None:
-        config["messages"] = update.messages
-    if update.person_messages is not None:
-        config["person_messages"] = update.person_messages
-    if update.video_messages is not None:
-        config["video_messages"] = update.video_messages
-    if update.video_person_messages is not None:
-        config["video_person_messages"] = update.video_person_messages
-    if update.then_and_now_messages is not None:
-        config["then_and_now_messages"] = update.then_and_now_messages
-    if update.trip_highlights_messages is not None:
-        config["trip_highlights_messages"] = update.trip_highlights_messages
-
-    save_config(config_path, config)
     return {"message": "Messages updated"}
 
 
@@ -201,22 +244,19 @@ async def update_messages(request: Request, update: MessagesUpdate):
 async def update_settings(request: Request, update: SettingsUpdate):
     """Update general settings."""
     config_path = get_config_path(request)
+    update_dict = update.model_dump(exclude_none=True)
 
     try:
-        config = load_config(config_path)
+        with exclusive_lock(config_path):
+            config = load_config_exclusive(config_path)
+            if "settings" not in config:
+                config["settings"] = {}
+            for key, value in update_dict.items():
+                config["settings"][key] = value
+            _write_yaml(config_path, config)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Config file not found")
 
-    if "settings" not in config:
-        config["settings"] = {}
-
-    settings = config["settings"]
-    update_dict = update.model_dump(exclude_none=True)
-
-    for key, value in update_dict.items():
-        settings[key] = value
-
-    save_config(config_path, config)
     return {"message": "Settings updated", "updated_fields": list(update_dict.keys())}
 
 
@@ -247,35 +287,35 @@ async def toggle_user(request: Request, name: str, update: UserEnabledUpdate):
     config_path = get_config_path(request)
 
     try:
-        config = load_config(config_path)
+        with exclusive_lock(config_path):
+            config = load_config_exclusive(config_path)
+            users = config.get("users", [])
+            user_found = False
+            for user in users:
+                if user.get("name") == name:
+                    user["enabled"] = update.enabled
+                    user_found = True
+                    break
+            if not user_found:
+                raise HTTPException(status_code=404, detail=f"User '{name}' not found")
+            _write_yaml(config_path, config)
+    except HTTPException:
+        raise
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Config file not found")
 
-    users = config.get("users", [])
-    user_found = False
-
-    for user in users:
-        if user.get("name") == name:
-            user["enabled"] = update.enabled
-            user_found = True
-            break
-
-    if not user_found:
-        raise HTTPException(status_code=404, detail=f"User '{name}' not found")
-
-    save_config(config_path, config)
     return {"message": f"User '{name}' enabled={update.enabled}"}
 
 
 class NewUser(BaseModel):
-    name: str
-    ntfy_topic: str
-    ntfy_username: str = ""
+    name: str = Field(..., max_length=64, pattern=r"^[a-zA-Z0-9 _\-؀-ۿ]+$")
+    ntfy_topic: str = Field(..., max_length=256, pattern=r"^[a-zA-Z0-9_\-]+$")
+    ntfy_username: str = Field("", max_length=64)
     enabled: bool = True
 
 
 class RenameUser(BaseModel):
-    new_name: str
+    new_name: str = Field(..., max_length=64, pattern=r"^[a-zA-Z0-9 _\-؀-ۿ]+$")
 
 
 @router.post("/users")
@@ -284,30 +324,30 @@ async def add_user(request: Request, user: NewUser):
     config_path = get_config_path(request)
 
     try:
-        config = load_config(config_path)
+        with exclusive_lock(config_path):
+            config = load_config_exclusive(config_path)
+            users = config.get("users", [])
+
+            for u in users:
+                if u.get("name") == user.name:
+                    raise HTTPException(status_code=400, detail=f"User '{user.name}' already exists")
+
+            new_user = {
+                "name": user.name,
+                "immich_api_key": "${IMMICH_API_KEY_" + user.name.upper().replace(" ", "_") + "}",
+                "ntfy_topic": user.ntfy_topic,
+                "ntfy_username": user.ntfy_username or user.name.lower(),
+                "ntfy_password": "${NTFY_PASSWORD_" + user.name.upper().replace(" ", "_") + "}",
+                "enabled": user.enabled,
+            }
+
+            users.append(new_user)
+            config["users"] = users
+            _write_yaml(config_path, config)
+    except HTTPException:
+        raise
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Config file not found")
-
-    users = config.get("users", [])
-
-    # Check if user already exists
-    for u in users:
-        if u.get("name") == user.name:
-            raise HTTPException(status_code=400, detail=f"User '{user.name}' already exists")
-
-    # Add new user with placeholder for secrets
-    new_user = {
-        "name": user.name,
-        "immich_api_key": "${IMMICH_API_KEY_" + user.name.upper().replace(" ", "_") + "}",
-        "ntfy_topic": user.ntfy_topic,
-        "ntfy_username": user.ntfy_username or user.name.lower(),
-        "ntfy_password": "${NTFY_PASSWORD_" + user.name.upper().replace(" ", "_") + "}",
-        "enabled": user.enabled,
-    }
-
-    users.append(new_user)
-    config["users"] = users
-    save_config(config_path, config)
 
     return {
         "message": f"User '{user.name}' added",
@@ -325,20 +365,19 @@ async def delete_user(request: Request, name: str):
     config_path = get_config_path(request)
 
     try:
-        config = load_config(config_path)
+        with exclusive_lock(config_path):
+            config = load_config_exclusive(config_path)
+            users = config.get("users", [])
+            original_count = len(users)
+            users = [u for u in users if u.get("name") != name]
+            if len(users) == original_count:
+                raise HTTPException(status_code=404, detail=f"User '{name}' not found")
+            config["users"] = users
+            _write_yaml(config_path, config)
+    except HTTPException:
+        raise
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Config file not found")
-
-    users = config.get("users", [])
-    original_count = len(users)
-
-    users = [u for u in users if u.get("name") != name]
-
-    if len(users) == original_count:
-        raise HTTPException(status_code=404, detail=f"User '{name}' not found")
-
-    config["users"] = users
-    save_config(config_path, config)
 
     return {"message": f"User '{name}' deleted"}
 
@@ -349,23 +388,23 @@ async def set_user_home_city(request: Request, name: str, body: dict):
     config_path = get_config_path(request)
 
     try:
-        config = load_config(config_path)
+        with exclusive_lock(config_path):
+            config = load_config_exclusive(config_path)
+            users = config.get("users", [])
+            user_found = False
+            for user in users:
+                if user.get("name") == name:
+                    user["home_city"] = body.get("home_city", "")
+                    user_found = True
+                    break
+            if not user_found:
+                raise HTTPException(status_code=404, detail=f"User '{name}' not found")
+            _write_yaml(config_path, config)
+    except HTTPException:
+        raise
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Config file not found")
 
-    users = config.get("users", [])
-    user_found = False
-
-    for user in users:
-        if user.get("name") == name:
-            user["home_city"] = body.get("home_city", "")
-            user_found = True
-            break
-
-    if not user_found:
-        raise HTTPException(status_code=404, detail=f"User '{name}' not found")
-
-    save_config(config_path, config)
     return {"message": f"User '{name}' home_city updated"}
 
 
@@ -428,27 +467,27 @@ async def rename_user(request: Request, name: str, update: RenameUser):
     config_path = get_config_path(request)
 
     try:
-        config = load_config(config_path)
+        with exclusive_lock(config_path):
+            config = load_config_exclusive(config_path)
+            users = config.get("users", [])
+
+            for u in users:
+                if u.get("name") == update.new_name:
+                    raise HTTPException(status_code=400, detail=f"User '{update.new_name}' already exists")
+
+            user_found = False
+            for u in users:
+                if u.get("name") == name:
+                    u["name"] = update.new_name
+                    user_found = True
+                    break
+
+            if not user_found:
+                raise HTTPException(status_code=404, detail=f"User '{name}' not found")
+            _write_yaml(config_path, config)
+    except HTTPException:
+        raise
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Config file not found")
 
-    users = config.get("users", [])
-
-    # Check if new name already exists
-    for u in users:
-        if u.get("name") == update.new_name:
-            raise HTTPException(status_code=400, detail=f"User '{update.new_name}' already exists")
-
-    # Find and rename user
-    user_found = False
-    for u in users:
-        if u.get("name") == name:
-            u["name"] = update.new_name
-            user_found = True
-            break
-
-    if not user_found:
-        raise HTTPException(status_code=404, detail=f"User '{name}' not found")
-
-    save_config(config_path, config)
     return {"message": f"User '{name}' renamed to '{update.new_name}'"}

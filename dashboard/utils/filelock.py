@@ -21,8 +21,10 @@ def file_lock(filepath: str, exclusive: bool = True) -> Generator[None, None, No
             # Safe to read/write the file
             pass
     """
-    lock_path = Path(filepath).with_suffix(Path(filepath).suffix + '.lock')
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_dir = Path("/tmp/memnotify-locks")
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_name = Path(filepath).name + '.lock'
+    lock_path = lock_dir / lock_name
 
     lock_file = open(lock_path, 'w')
     try:
@@ -44,5 +46,12 @@ def read_lock(filepath: str) -> Generator[None, None, None]:
 @contextmanager
 def write_lock(filepath: str) -> Generator[None, None, None]:
     """Acquire an exclusive (write) lock on a file."""
+    with file_lock(filepath, exclusive=True):
+        yield
+
+
+@contextmanager
+def exclusive_lock(filepath: str) -> Generator[None, None, None]:
+    """Acquire an exclusive lock for read-modify-write cycles."""
     with file_lock(filepath, exclusive=True):
         yield

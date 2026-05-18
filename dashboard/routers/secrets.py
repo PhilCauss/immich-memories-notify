@@ -1,15 +1,17 @@
 """Secrets/Environment management API endpoints."""
 
+import ipaddress
 import os
 import re
 import time
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+from urllib.parse import urlparse
 
 import requests as http_requests
 import yaml
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..utils.filelock import read_lock, write_lock
 
@@ -20,27 +22,49 @@ ENV_PATH = os.environ.get("ENV_PATH", "/app/.env")
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "/app/config.yaml")
 
 
+def _validate_url_not_internal(url: str):
+    """Block SSRF attempts by rejecting URLs that resolve to internal/metadata IPs."""
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(status_code=400, detail="Invalid URL")
+
+    # Block cloud metadata endpoints
+    if hostname in ("169.254.169.254", "metadata.google.internal"):
+        raise HTTPException(status_code=400, detail="URL points to a blocked address")
+
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if addr.is_loopback or addr.is_link_local:
+            raise HTTPException(status_code=400, detail="URL points to a blocked address")
+    except ValueError:
+        pass
+
+    scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="Only http/https URLs are allowed")
+
+
 class ConnectionTestRequest(BaseModel):
     """Request body for connection test endpoints."""
-    url: str
+    url: str = Field(..., max_length=2048)
     skip_attach_test: bool = False
 
 
 class SecretsUpdate(BaseModel):
     """Update secrets - only non-None values are updated."""
-    immich_url: Optional[str] = None
-    immich_external_url: Optional[str] = None
-    ntfy_url: Optional[str] = None
-    ntfy_external_url: Optional[str] = None
-    dashboard_token: Optional[str] = None
-    # Dynamic user secrets: {"USER_NAME": {"api_key": "...", "ntfy_password": "..."}}
+    immich_url: Optional[str] = Field(None, max_length=2048)
+    immich_external_url: Optional[str] = Field(None, max_length=2048)
+    ntfy_url: Optional[str] = Field(None, max_length=2048)
+    ntfy_external_url: Optional[str] = Field(None, max_length=2048)
+    dashboard_token: Optional[str] = Field(None, max_length=256)
     users: Optional[Dict[str, Dict[str, str]]] = None
 
 
 class UserSecretUpdate(BaseModel):
     """Update a single user's secrets."""
-    api_key: Optional[str] = None
-    ntfy_password: Optional[str] = None
+    api_key: Optional[str] = Field(None, max_length=256)
+    ntfy_password: Optional[str] = Field(None, max_length=256)
 
 
 def load_config(config_path: str) -> dict:
@@ -73,12 +97,9 @@ def load_env_file(env_path: str) -> dict:
 
 def _sanitize_env_value(value: str) -> str:
     """Sanitize a value for safe .env file storage."""
-    # Strip newlines and carriage returns to prevent injection
-    value = value.replace('\n', '').replace('\r', '')
-    # Quote if value contains spaces, #, or quotes
-    if any(c in value for c in (' ', '#', '"', "'")):
-        # Escape existing double quotes and wrap in double quotes
-        value = '"' + value.replace('"', '\\"') + '"'
+    value = value.replace('\n', '').replace('\r', '').replace('\x00', '')
+    if any(c in value for c in (' ', '#', '"', "'", '$', '`')):
+        value = '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$').replace('`', '\\`') + '"'
     return value
 
 
@@ -117,13 +138,13 @@ def save_env_file(env_path: str, env_vars: dict):
             f.writelines(lines)
 
 
-def mask_secret(value: str, show_chars: int = 4) -> str:
-    """Mask a secret value, showing only last few characters."""
+def mask_secret(value: str) -> str:
+    """Mask a secret value, showing only last 4 chars if long enough."""
     if not value:
         return ""
-    if len(value) <= show_chars:
-        return "*" * len(value)
-    return "*" * (len(value) - show_chars) + value[-show_chars:]
+    if len(value) <= 8:
+        return "********"
+    return "********" + value[-4:]
 
 
 def get_env_var_name(user_name: str, var_type: str) -> str:
@@ -313,6 +334,7 @@ async def test_immich_connection(req: ConnectionTestRequest):
     url = req.url.strip().rstrip("/")
     if not url:
         raise HTTPException(status_code=400, detail="URL is required")
+    _validate_url_not_internal(url)
 
     test_url = f"{url}/api/server/ping"
     start = time.time()
@@ -326,8 +348,8 @@ async def test_immich_connection(req: ConnectionTestRequest):
         return {"success": False, "message": "Connection refused — is Immich running at this address?", "detail": f"Could not connect to {url}"}
     except http_requests.exceptions.Timeout:
         return {"success": False, "message": "Connection timed out (5s) — check the host and port", "detail": f"Timeout connecting to {url}"}
-    except Exception as e:
-        return {"success": False, "message": f"Connection failed: {e}", "detail": str(e)}
+    except Exception:
+        return {"success": False, "message": "Connection failed unexpectedly", "detail": ""}
 
 
 @router.post("/test/ntfy")
@@ -336,6 +358,7 @@ async def test_ntfy_connection(req: ConnectionTestRequest):
     url = req.url.strip().rstrip("/")
     if not url:
         raise HTTPException(status_code=400, detail="URL is required")
+    _validate_url_not_internal(url)
 
     test_url = f"{url}/v1/health"
     start = time.time()
@@ -393,5 +416,5 @@ async def test_ntfy_connection(req: ConnectionTestRequest):
         return {"success": False, "message": "Connection refused — is ntfy running at this address?", "detail": f"Could not connect to {url}"}
     except http_requests.exceptions.Timeout:
         return {"success": False, "message": "Connection timed out (5s) — check the host and port", "detail": f"Timeout connecting to {url}"}
-    except Exception as e:
-        return {"success": False, "message": f"Connection failed: {e}", "detail": str(e)}
+    except Exception:
+        return {"success": False, "message": "Connection failed unexpectedly", "detail": ""}

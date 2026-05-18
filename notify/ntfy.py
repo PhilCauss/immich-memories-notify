@@ -46,6 +46,11 @@ def upload_image_to_ntfy(ntfy_url: str, image_data: bytes, auth: tuple = None, t
     return None
 
 
+def _sanitize_header(value: str) -> str:
+    """Strip control characters that could cause header injection."""
+    return value.replace("\r", "").replace("\n", "").replace("\x00", "")
+
+
 def send_notification(
     ntfy_url: str,
     topic: str,
@@ -58,6 +63,8 @@ def send_notification(
     is_video: bool = False,
 ) -> bool:
     """Send a notification to ntfy."""
+    topic = _sanitize_header(topic)
+    title = _sanitize_header(title)
     url = f"{ntfy_url}/{topic}"
 
     # Use different tags for videos
@@ -80,7 +87,7 @@ def send_notification(
     }
 
     if click_url:
-        headers["Click"] = click_url
+        headers["Click"] = _sanitize_header(click_url)
 
     # Upload thumbnail and attach it
     if thumbnail_data:
