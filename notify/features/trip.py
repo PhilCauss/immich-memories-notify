@@ -28,6 +28,7 @@ def fetch_month_assets(immich_url: str, api_key: str, year: int, month: int, tim
         "takenBefore": f"{year}-{month:02d}-{last_day:02d}T23:59:59.999Z",
         "type": "IMAGE",
         "size": size,
+        "withExif": True,
     }
     response = requests.post(
         f"{immich_url}/api/search/metadata",

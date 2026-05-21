@@ -883,10 +883,6 @@
                         <label>Min Group Size</label>
                         <input type="number" id="min_group_size" min="2" max="10">
                     </div>
-                    <div class="form-group">
-                        <label>Year Range</label>
-                        <input type="number" id="year_range" min="1" max="30" value="5">
-                    </div>
                 </div>
 
                 <h3>Feature Toggles</h3>
@@ -989,6 +985,10 @@
                     <div class="form-group">
                         <label>Min Year Gap</label>
                         <input type="number" id="then_and_now_min_gap" min="1" value="3">
+                    </div>
+                    <div class="form-group">
+                        <label>Lookback Years</label>
+                        <input type="number" id="year_range" min="1" max="30" value="5">
                     </div>
                 </div>
 
@@ -1289,7 +1289,7 @@
                             </span>
                         </h4>
                         <div class="slots-display">
-                            ${[1,2,3,4,5].map(s => `
+                            ${Array.from({length: _configuredSlots}, (_, i) => i + 1).map(s => `
                                 <div class="slot-indicator ${state.slots_sent.includes(s) ? 'sent' : ''}">${s}</div>
                             `).join('')}
                         </div>
@@ -1366,6 +1366,12 @@
                 document.getElementById('memory_notifications').value = data.settings.memory_notifications;
                 document.getElementById('person_notifications').value = data.settings.person_notifications;
                 document.getElementById('fallback_notifications').value = data.settings.fallback_notifications;
+
+                _memorySlots = data.settings.memory_notifications || 3;
+                _configuredSlots = _memorySlots + (data.settings.person_notifications || 2);
+                _windowCount = (data.settings.notification_windows || []).length;
+                _hasAlbumUsers = data.users.some(u => (u.album_names || []).length > 0);
+                initTestSlots();
                 document.getElementById('top_persons_limit').value = data.settings.top_persons_limit;
                 document.getElementById('exclude_recent_days').value = data.settings.exclude_recent_days;
                 document.getElementById('min_group_size').value = data.settings.min_group_size;
@@ -1464,6 +1470,8 @@
                     body: JSON.stringify({ notification_windows: windows }),
                 });
                 showAlert('settings-alert', 'Windows saved and scheduler restarted!');
+                _windowCount = windows.length;
+                initTestSlots();
             } catch (e) {
                 showAlert('settings-alert', e.message, 'error');
             }
@@ -1502,6 +1510,9 @@
                     body: JSON.stringify(settings),
                 });
                 showAlert('settings-alert', 'Settings saved successfully');
+                _memorySlots = settings.memory_notifications;
+                _configuredSlots = _memorySlots + settings.person_notifications;
+                initTestSlots();
             } catch (e) {
                 showAlert('settings-alert', e.message, 'error');
             }
@@ -1846,16 +1857,31 @@
         }
 
         // Test functions
+        let _windowCount = 5;
+        let _configuredSlots = 5;
+        let _memorySlots = 3;
+        let _hasAlbumUsers = false;
+
         function initTestSlots() {
-            document.getElementById('test-slots').innerHTML = [1,2,3,4,5].map(slot => `
-                <div class="slot-card">
+            const count = Math.max(_windowCount, _configuredSlots);
+            const slots = Array.from({length: count}, (_, i) => i + 1);
+            document.getElementById('test-slots').innerHTML = slots.map(slot => {
+                let label, style = '';
+                if (slot > _configuredSlots) {
+                    label = 'Unused';
+                    style = 'opacity: 0.5;';
+                } else if (slot <= _memorySlots) {
+                    label = 'Memory / Fallback';
+                } else {
+                    label = _hasAlbumUsers ? 'Person / Album' : 'Person Photo';
+                }
+                return `
+                <div class="slot-card" style="${style}">
                     <h4>Slot ${slot}</h4>
-                    <p style="color: var(--text-muted); font-size: 0.85rem;">
-                        ${slot <= 3 ? 'Memory/Fallback' : 'Person Photo'}
-                    </p>
-                    <button onclick="triggerTest(${slot})">Send Test</button>
-                </div>
-            `).join('');
+                    <p style="color: var(--text-muted); font-size: 0.85rem;">${label}</p>
+                    <button onclick="triggerTest(${slot})"${slot > _configuredSlots ? ' disabled' : ''}>Send Test</button>
+                </div>`;
+            }).join('');
         }
 
         async function triggerTest(slot) {
