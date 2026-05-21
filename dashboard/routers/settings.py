@@ -121,6 +121,7 @@ async def get_settings(request: Request):
             ntfy_topic=u.get("ntfy_topic", ""),
             enabled=u.get("enabled", True),
             home_city=u.get("home_city", ""),
+            album_names=u.get("album_names", []),
         )
         for u in config.get("users", [])
     ]
@@ -134,11 +135,14 @@ async def get_settings(request: Request):
         video_person_messages=config.get("video_person_messages", []),
         then_and_now_messages=config.get("then_and_now_messages", []),
         trip_highlights_messages=config.get("trip_highlights_messages", []),
+        album_messages=config.get("album_messages", []),
+        video_album_messages=config.get("video_album_messages", []),
         memory_titles=config.get("memory_titles", []),
         person_titles=config.get("person_titles", []),
         collage_titles=config.get("collage_titles", []),
         then_and_now_titles=config.get("then_and_now_titles", []),
         trip_highlights_titles=config.get("trip_highlights_titles", []),
+        album_titles=config.get("album_titles", []),
     )
 
 
@@ -195,11 +199,14 @@ async def get_messages(request: Request):
         "video_person_messages": config.get("video_person_messages", []),
         "then_and_now_messages": config.get("then_and_now_messages", []),
         "trip_highlights_messages": config.get("trip_highlights_messages", []),
+        "album_messages": config.get("album_messages", []),
+        "video_album_messages": config.get("video_album_messages", []),
         "memory_titles": config.get("memory_titles", []),
         "person_titles": config.get("person_titles", []),
         "collage_titles": config.get("collage_titles", []),
         "then_and_now_titles": config.get("then_and_now_titles", []),
         "trip_highlights_titles": config.get("trip_highlights_titles", []),
+        "album_titles": config.get("album_titles", []),
     }
 
 
@@ -223,6 +230,10 @@ async def update_messages(request: Request, update: MessagesUpdate):
                 config["then_and_now_messages"] = update.then_and_now_messages
             if update.trip_highlights_messages is not None:
                 config["trip_highlights_messages"] = update.trip_highlights_messages
+            if update.album_messages is not None:
+                config["album_messages"] = update.album_messages
+            if update.video_album_messages is not None:
+                config["video_album_messages"] = update.video_album_messages
             if update.memory_titles is not None:
                 config["memory_titles"] = update.memory_titles
             if update.person_titles is not None:
@@ -233,6 +244,8 @@ async def update_messages(request: Request, update: MessagesUpdate):
                 config["then_and_now_titles"] = update.then_and_now_titles
             if update.trip_highlights_titles is not None:
                 config["trip_highlights_titles"] = update.trip_highlights_titles
+            if update.album_titles is not None:
+                config["album_titles"] = update.album_titles
             _write_yaml(config_path, config)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Config file not found")
@@ -276,6 +289,7 @@ async def get_users(request: Request):
             ntfy_topic=u.get("ntfy_topic", ""),
             enabled=u.get("enabled", True),
             home_city=u.get("home_city", ""),
+            album_names=u.get("album_names", []),
         )
         for u in config.get("users", [])
     ]
@@ -459,6 +473,70 @@ async def get_user_cities(request: Request, name: str):
         raise HTTPException(status_code=502, detail=f"Failed to fetch from Immich: {e}")
 
     return {"cities": sorted(cities)}
+
+
+@router.get("/users/{name}/albums")
+async def get_user_albums(request: Request, name: str):
+    """Fetch albums from Immich for a user."""
+    config_path = get_config_path(request)
+
+    try:
+        config = load_config(config_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Config file not found")
+
+    user = next((u for u in config.get("users", []) if u.get("name") == name), None)
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User '{name}' not found")
+
+    api_key = _resolve_user_api_key(user)
+    if not api_key:
+        raise HTTPException(status_code=400, detail="User has no API key configured")
+
+    immich_url = os.environ.get("IMMICH_URL", "").rstrip("/")
+    if not immich_url:
+        raise HTTPException(status_code=400, detail="IMMICH_URL not configured")
+
+    try:
+        headers = {"Accept": "application/json", "x-api-key": api_key}
+        resp = http_requests.get(f"{immich_url}/api/albums", headers=headers, timeout=30)
+        resp.raise_for_status()
+        albums = [
+            {"id": a.get("id"), "name": a.get("albumName", ""), "count": a.get("assetCount", 0)}
+            for a in resp.json()
+            if a.get("albumName")
+        ]
+        albums.sort(key=lambda a: a["name"].lower())
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch albums from Immich: {e}")
+
+    return {"albums": albums}
+
+
+@router.put("/users/{name}/album_names")
+async def set_user_album_names(request: Request, name: str, body: dict):
+    """Set the album names for a user (used for album notifications)."""
+    config_path = get_config_path(request)
+
+    try:
+        with exclusive_lock(config_path):
+            config = load_config_exclusive(config_path)
+            users = config.get("users", [])
+            user_found = False
+            for user in users:
+                if user.get("name") == name:
+                    user["album_names"] = body.get("album_names", [])
+                    user_found = True
+                    break
+            if not user_found:
+                raise HTTPException(status_code=404, detail=f"User '{name}' not found")
+            _write_yaml(config_path, config)
+    except HTTPException:
+        raise
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Config file not found")
+
+    return {"message": f"User '{name}' album_names updated"}
 
 
 @router.put("/users/{name}/rename")

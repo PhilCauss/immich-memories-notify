@@ -549,6 +549,39 @@ def get_or_create_album(immich_url: str, api_key: str, album_name: str, logger: 
         return None
 
 
+def get_album_assets(
+    immich_url: str, api_key: str, album_name: str, logger: logging.Logger = None
+) -> Optional[dict]:
+    """Fetch all assets from a named album. Returns dict with album_id, album_name, assets or None."""
+    headers = {"Accept": "application/json", "x-api-key": api_key}
+    try:
+        response = requests.get(f"{immich_url}/api/albums", headers=headers, timeout=30)
+        response.raise_for_status()
+        albums = response.json()
+        album_id = None
+        for album in albums:
+            if album.get("albumName") == album_name:
+                album_id = album.get("id")
+                break
+        if not album_id:
+            if logger:
+                logger.debug(f"Album '{album_name}' not found")
+            return None
+
+        response = requests.get(f"{immich_url}/api/albums/{album_id}", headers=headers, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        return {
+            "album_id": album_id,
+            "album_name": album_name,
+            "assets": data.get("assets", []),
+        }
+    except Exception as e:
+        if logger:
+            logger.warning(f"Failed to fetch album '{album_name}': {e}")
+        return None
+
+
 def upload_collage_to_album(
     immich_url: str,
     api_key: str,

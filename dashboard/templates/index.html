@@ -1057,6 +1057,18 @@
                     <small style="color: var(--text-muted)">Placeholders: {city}, {country}, {year}, {gap}</small>
                 </div>
 
+                <div class="form-group">
+                    <label>Album Messages (one per line)</label>
+                    <textarea id="album_messages" placeholder="A random moment from {album_name}"></textarea>
+                    <small style="color: var(--text-muted)">Placeholders: {album_name}, {location}</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Video Album Messages (one per line)</label>
+                    <textarea id="video_album_messages" placeholder="Watch this clip from {album_name}..."></textarea>
+                    <small style="color: var(--text-muted)">Placeholders: {album_name}</small>
+                </div>
+
                 <h2 style="margin-top: 30px;">Title Templates</h2>
                 <p style="color: var(--text-muted); margin-bottom: 15px;">Customize notification headers. One per line — a random one is picked each time.</p>
 
@@ -1088,6 +1100,12 @@
                     <label>Trip Highlights Titles (one per line)</label>
                     <textarea id="trip_highlights_titles" placeholder="Trip to {city} 🌍"></textarea>
                     <small style="color: var(--text-muted)">Placeholders: {city}, {country}, {year}, {gap}</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Album Titles (one per line)</label>
+                    <textarea id="album_titles" placeholder="{album_name}"></textarea>
+                    <small style="color: var(--text-muted)">Placeholders: {album_name}</small>
                 </div>
 
                 <div class="btn-group">
@@ -1323,6 +1341,17 @@
                             </div>
                             <div id="city-dropdown-${safeId}" class="city-dropdown" style="display:none; position:absolute; left:70px; right:40px; top:100%; z-index:100; max-height:200px; overflow-y:auto; background:var(--bg-secondary); border:1px solid var(--border); border-radius:4px; box-shadow:0 4px 12px rgba(0,0,0,0.3);"></div>
                         </div>
+                        <div style="position: relative; margin-top: 6px;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap;">Albums:</label>
+                                <div id="album-tags-${safeId}" style="flex: 1; display: flex; flex-wrap: wrap; gap: 4px; min-height: 24px; align-items: center;">
+                                    ${(user.album_names || []).map(a => `<span style="background: var(--accent); color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem;">${escapeHtml(a)}</span>`).join('') || '<span style="font-size: 0.8rem; color: var(--text-muted);">None</span>'}
+                                </div>
+                                <button class="secondary" style="padding: 3px 8px; font-size: 0.75rem; white-space: nowrap;"
+                                    onclick="toggleAlbumDropdown('${jsName}', this)">&#9660;</button>
+                            </div>
+                            <div id="album-dropdown-${safeId}" class="album-dropdown" style="display:none; position:absolute; left:60px; right:40px; top:100%; z-index:100; max-height:250px; overflow-y:auto; background:var(--bg-secondary); border:1px solid var(--border); border-radius:4px; box-shadow:0 4px 12px rgba(0,0,0,0.3);"></div>
+                        </div>
                         <div class="btn-group" style="justify-content: flex-end;">
                             <button class="secondary" style="padding: 4px 10px; font-size: 0.8rem;" onclick="renameUser('${jsName}')">Rename</button>
                             <button class="danger" style="padding: 4px 10px; font-size: 0.8rem;" onclick="deleteUser('${jsName}')">Delete</button>
@@ -1371,11 +1400,14 @@
                 document.getElementById('video_person_messages').value = data.video_person_messages.join('\n');
                 document.getElementById('then_and_now_messages').value = data.then_and_now_messages.join('\n');
                 document.getElementById('trip_highlights_messages').value = data.trip_highlights_messages.join('\n');
+                document.getElementById('album_messages').value = (data.album_messages || []).join('\n');
+                document.getElementById('video_album_messages').value = (data.video_album_messages || []).join('\n');
                 document.getElementById('memory_titles').value = (data.memory_titles || []).join('\n');
                 document.getElementById('person_titles').value = (data.person_titles || []).join('\n');
                 document.getElementById('collage_titles').value = (data.collage_titles || []).join('\n');
                 document.getElementById('then_and_now_titles').value = (data.then_and_now_titles || []).join('\n');
                 document.getElementById('trip_highlights_titles').value = (data.trip_highlights_titles || []).join('\n');
+                document.getElementById('album_titles').value = (data.album_titles || []).join('\n');
             } catch (e) {
                 showAlert('settings-alert', e.message, 'error');
             }
@@ -1685,10 +1717,90 @@
 
         // Close dropdowns when clicking outside
         document.addEventListener('click', (e) => {
-            if (!e.target.closest('.city-dropdown') && !e.target.closest('button')) {
+            if (!e.target.closest('.city-dropdown') && !e.target.closest('.album-dropdown') && !e.target.closest('button')) {
                 document.querySelectorAll('.city-dropdown').forEach(d => d.style.display = 'none');
+                document.querySelectorAll('.album-dropdown').forEach(d => d.style.display = 'none');
             }
         });
+
+        const _albumsCache = {};
+        let _userAlbumSelections = {};
+
+        async function toggleAlbumDropdown(userName, btn) {
+            const slug = userName.replace(/\s+/g, '-');
+            const dropdown = document.getElementById(`album-dropdown-${slug}`);
+            if (!dropdown) return;
+
+            if (dropdown.style.display !== 'none') {
+                dropdown.style.display = 'none';
+                return;
+            }
+
+            document.querySelectorAll('.album-dropdown').forEach(d => d.style.display = 'none');
+
+            btn.disabled = true;
+            btn.textContent = '...';
+            try {
+                if (!_albumsCache[userName]) {
+                    const data = await api(`/settings/users/${encodeURIComponent(userName)}/albums`);
+                    _albumsCache[userName] = data.albums;
+                }
+
+                if (!_userAlbumSelections[userName]) {
+                    const settingsData = await api('/settings/');
+                    const user = settingsData.users.find(u => u.name === userName);
+                    _userAlbumSelections[userName] = new Set(user?.album_names || []);
+                }
+
+                const selected = _userAlbumSelections[userName];
+                const jsUserName = userName.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                dropdown.innerHTML = _albumsCache[userName].map(a => {
+                    const checked = selected.has(a.name) ? 'checked' : '';
+                    return `<label style="display:flex; align-items:center; gap:8px; padding:5px 10px; cursor:pointer; font-size:0.85rem; border-bottom:1px solid var(--border);"
+                                  onmouseover="this.style.background='var(--accent)'; this.style.color='white';"
+                                  onmouseout="this.style.background=''; this.style.color='';">
+                        <input type="checkbox" ${checked} onchange="toggleAlbumSelection('${jsUserName}', '${escapeHtml(a.name).replace(/'/g, "\\'")}', this.checked)">
+                        ${escapeHtml(a.name)} <span style="color:var(--text-muted); font-size:0.75rem;">(${a.count})</span>
+                    </label>`;
+                }).join('');
+                if (_albumsCache[userName].length === 0) {
+                    dropdown.innerHTML = '<div style="padding:10px; color:var(--text-muted); font-size:0.85rem;">No albums found</div>';
+                }
+                dropdown.style.display = 'block';
+            } catch (e) {
+                showAlert('settings-alert', `Failed to load albums: ${e.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '&#9660;';
+            }
+        }
+
+        async function toggleAlbumSelection(userName, albumName, isChecked) {
+            if (!_userAlbumSelections[userName]) _userAlbumSelections[userName] = new Set();
+            if (isChecked) {
+                _userAlbumSelections[userName].add(albumName);
+            } else {
+                _userAlbumSelections[userName].delete(albumName);
+            }
+
+            const albumNames = Array.from(_userAlbumSelections[userName]);
+            try {
+                await api(`/settings/users/${encodeURIComponent(userName)}/album_names`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ album_names: albumNames }),
+                });
+                // Update tags display
+                const slug = userName.replace(/\s+/g, '-');
+                const tagsEl = document.getElementById(`album-tags-${slug}`);
+                if (tagsEl) {
+                    tagsEl.innerHTML = albumNames.length
+                        ? albumNames.map(a => `<span style="background: var(--accent); color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem;">${escapeHtml(a)}</span>`).join('')
+                        : '<span style="font-size: 0.8rem; color: var(--text-muted);">None</span>';
+                }
+            } catch (e) {
+                showAlert('settings-alert', `Failed to save albums: ${e.message}`, 'error');
+            }
+        }
 
         async function deleteUser(name) {
             if (!confirm(`Are you sure you want to delete user '${name}'?`)) return;
@@ -1712,11 +1824,14 @@
                 video_person_messages: document.getElementById('video_person_messages').value.split('\n').filter(m => m.trim()),
                 then_and_now_messages: document.getElementById('then_and_now_messages').value.split('\n').filter(m => m.trim()),
                 trip_highlights_messages: document.getElementById('trip_highlights_messages').value.split('\n').filter(m => m.trim()),
+                album_messages: document.getElementById('album_messages').value.split('\n').filter(m => m.trim()),
+                video_album_messages: document.getElementById('video_album_messages').value.split('\n').filter(m => m.trim()),
                 memory_titles: document.getElementById('memory_titles').value.split('\n').filter(m => m.trim()),
                 person_titles: document.getElementById('person_titles').value.split('\n').filter(m => m.trim()),
                 collage_titles: document.getElementById('collage_titles').value.split('\n').filter(m => m.trim()),
                 then_and_now_titles: document.getElementById('then_and_now_titles').value.split('\n').filter(m => m.trim()),
                 trip_highlights_titles: document.getElementById('trip_highlights_titles').value.split('\n').filter(m => m.trim()),
+                album_titles: document.getElementById('album_titles').value.split('\n').filter(m => m.trim()),
             };
 
             try {

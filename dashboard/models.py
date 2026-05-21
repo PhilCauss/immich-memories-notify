@@ -51,6 +51,7 @@ class UserInfo(BaseModel):
     ntfy_topic: str
     enabled: bool = True
     home_city: str = ""
+    album_names: List[str] = Field(default_factory=list)
 
 
 class FullConfig(BaseModel):
@@ -63,11 +64,14 @@ class FullConfig(BaseModel):
     video_person_messages: List[str]
     then_and_now_messages: List[str]
     trip_highlights_messages: List[str]
+    album_messages: List[str]
+    video_album_messages: List[str]
     memory_titles: List[str]
     person_titles: List[str]
     collage_titles: List[str]
     then_and_now_titles: List[str]
     trip_highlights_titles: List[str]
+    album_titles: List[str]
 
 
 # Update Models
@@ -82,11 +86,14 @@ class MessagesUpdate(BaseModel):
     video_person_messages: Optional[List[str]] = None
     then_and_now_messages: Optional[List[str]] = None
     trip_highlights_messages: Optional[List[str]] = None
+    album_messages: Optional[List[str]] = None
+    video_album_messages: Optional[List[str]] = None
     memory_titles: Optional[List[str]] = None
     person_titles: Optional[List[str]] = None
     collage_titles: Optional[List[str]] = None
     then_and_now_titles: Optional[List[str]] = None
     trip_highlights_titles: Optional[List[str]] = None
+    album_titles: Optional[List[str]] = None
 
 
 class SettingsUpdate(BaseModel):

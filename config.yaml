@@ -89,6 +89,14 @@ trip_highlights_messages:
 - '{city}, {country} — {gap} years have passed'
 - Flashback to {city}, {year} \u2708\ufe0f
 - What a trip! {city}, {country} — {year}
+album_messages:
+- A random moment from {album_name}
+- Something from {album_name} to brighten your day
+- From your {album_name} collection...
+- A surprise from {album_name}!
+video_album_messages:
+- Watch this clip from {album_name}...
+- A video from your {album_name} album
 memory_titles:
 - '{years_ago} years ago today'
 person_titles:
@@ -99,3 +107,5 @@ then_and_now_titles:
 - 'Then & Now — {person_name}'
 trip_highlights_titles:
 - 'Trip Highlights'
+album_titles:
+- '{album_name}'

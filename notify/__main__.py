@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import logging
+import random
 import sys
 import time
 from datetime import date, datetime
@@ -27,6 +28,7 @@ from .config import (
     save_state,
     setup_logging,
 )
+from .features.albums import prepare_album_notification
 from .features.collage import is_collage_day, process_collage_slot
 from .features.memories import prepare_memory_notification
 from .features.persons import prepare_person_notification
@@ -95,6 +97,9 @@ def process_user_slot(
     video_person_messages = config.get("video_person_messages", [])
     memory_titles = config.get("memory_titles", [])
     person_titles = config.get("person_titles", [])
+    album_messages = config.get("album_messages", [])
+    video_album_messages = config.get("video_album_messages", [])
+    album_titles = config.get("album_titles", [])
     settings = config["settings"]
 
     memory_notifications = settings.get("memory_notifications", 3)
@@ -102,6 +107,7 @@ def process_user_slot(
     fallback_notifications = settings.get("fallback_notifications", 3)
     top_persons_limit = settings.get("top_persons_limit", 5)
     exclude_recent_days = settings.get("exclude_recent_days", 30)
+    user_album_names = user.get("album_names", [])
 
     logger.info(f"  [{name}] Processing slot {slot}...")
 
@@ -283,39 +289,70 @@ def process_user_slot(
                     title_templates=memory_titles,
                 )
         elif slot <= total_slots:
-            # Send a person photo notification
-            notification = prepare_person_notification(
-                top_persons=top_persons,
-                assets_sent=assets_sent,
-                immich_url=immich_url,
-                api_key=api_key,
-                exclude_days=exclude_recent_days,
-                person_messages=person_messages,
-                test_mode=test_mode,
-                logger=logger,
-                settings=settings,
-                video_person_messages=video_person_messages,
-                title_templates=person_titles,
-            )
+            # Person slot — 30% chance of album photo if user has albums configured
+            if user_album_names and random.random() < 0.3:
+                notification = prepare_album_notification(
+                    album_names=user_album_names,
+                    assets_sent=assets_sent,
+                    immich_url=immich_url,
+                    api_key=api_key,
+                    album_messages=album_messages,
+                    test_mode=test_mode,
+                    logger=logger,
+                    settings=settings,
+                    video_album_messages=video_album_messages,
+                    title_templates=album_titles,
+                    target_date=target_date,
+                )
+            if not notification:
+                notification = prepare_person_notification(
+                    top_persons=top_persons,
+                    assets_sent=assets_sent,
+                    immich_url=immich_url,
+                    api_key=api_key,
+                    exclude_days=exclude_recent_days,
+                    person_messages=person_messages,
+                    test_mode=test_mode,
+                    logger=logger,
+                    settings=settings,
+                    video_person_messages=video_person_messages,
+                    title_templates=person_titles,
+                )
         else:
             logger.info(f"  [{name}] Slot {slot} exceeds configured slots ({total_slots}), skipping")
             return result
     else:
         # No memories: all slots send person photos
         if slot <= fallback_notifications:
-            notification = prepare_person_notification(
-                top_persons=top_persons,
-                assets_sent=assets_sent,
-                immich_url=immich_url,
-                api_key=api_key,
-                exclude_days=exclude_recent_days,
-                person_messages=person_messages,
-                test_mode=test_mode,
-                logger=logger,
-                settings=settings,
-                video_person_messages=video_person_messages,
-                title_templates=person_titles,
-            )
+            # Person slot — 30% chance of album photo if user has albums configured
+            if user_album_names and random.random() < 0.3:
+                notification = prepare_album_notification(
+                    album_names=user_album_names,
+                    assets_sent=assets_sent,
+                    immich_url=immich_url,
+                    api_key=api_key,
+                    album_messages=album_messages,
+                    test_mode=test_mode,
+                    logger=logger,
+                    settings=settings,
+                    video_album_messages=video_album_messages,
+                    title_templates=album_titles,
+                    target_date=target_date,
+                )
+            if not notification:
+                notification = prepare_person_notification(
+                    top_persons=top_persons,
+                    assets_sent=assets_sent,
+                    immich_url=immich_url,
+                    api_key=api_key,
+                    exclude_days=exclude_recent_days,
+                    person_messages=person_messages,
+                    test_mode=test_mode,
+                    logger=logger,
+                    settings=settings,
+                    video_person_messages=video_person_messages,
+                    title_templates=person_titles,
+                )
         else:
             logger.info(f"  [{name}] Slot {slot} exceeds fallback slots ({fallback_notifications}), skipping")
             return result
