@@ -120,7 +120,7 @@ async def get_settings(request: Request):
             name=u.get("name", ""),
             ntfy_topic=u.get("ntfy_topic", ""),
             enabled=u.get("enabled", True),
-            home_city=u.get("home_city", ""),
+            home_cities=u.get("home_cities") or ([u["home_city"]] if u.get("home_city") else []),
             album_names=u.get("album_names", []),
         )
         for u in config.get("users", [])
@@ -288,7 +288,7 @@ async def get_users(request: Request):
             name=u.get("name", ""),
             ntfy_topic=u.get("ntfy_topic", ""),
             enabled=u.get("enabled", True),
-            home_city=u.get("home_city", ""),
+            home_cities=u.get("home_cities") or ([u["home_city"]] if u.get("home_city") else []),
             album_names=u.get("album_names", []),
         )
         for u in config.get("users", [])
@@ -396,9 +396,9 @@ async def delete_user(request: Request, name: str):
     return {"message": f"User '{name}' deleted"}
 
 
-@router.put("/users/{name}/home_city")
-async def set_user_home_city(request: Request, name: str, body: dict):
-    """Set the home city for a user (used to exclude local photos from Trip Highlights)."""
+@router.put("/users/{name}/home_cities")
+async def set_user_home_cities(request: Request, name: str, body: dict):
+    """Set home cities for a user (excluded from Trip Highlights)."""
     config_path = get_config_path(request)
 
     try:
@@ -408,7 +408,8 @@ async def set_user_home_city(request: Request, name: str, body: dict):
             user_found = False
             for user in users:
                 if user.get("name") == name:
-                    user["home_city"] = body.get("home_city", "")
+                    user["home_cities"] = body.get("home_cities", [])
+                    user.pop("home_city", None)
                     user_found = True
                     break
             if not user_found:
@@ -419,7 +420,7 @@ async def set_user_home_city(request: Request, name: str, body: dict):
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Config file not found")
 
-    return {"message": f"User '{name}' home_city updated"}
+    return {"message": f"User '{name}' home_cities updated"}
 
 
 def _resolve_user_api_key(user: dict) -> str:

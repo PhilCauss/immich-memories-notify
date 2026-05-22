@@ -179,7 +179,7 @@ def process_user_slot(
             trip_messages = config.get("trip_highlights_messages", [])
             tan_titles = config.get("then_and_now_titles", [])
             trip_titles = config.get("trip_highlights_titles", [])
-            home_city = user.get("home_city", "")
+            home_cities = user.get("home_cities") or ([user["home_city"]] if user.get("home_city") else [])
             trip_min_photos = settings.get("trip_highlights_min_photos", 5)
             year_range = settings.get("year_range", 5)
 
@@ -222,7 +222,7 @@ def process_user_slot(
                             immich_url=immich_url,
                             api_key=api_key,
                             target_date=target_date,
-                            home_city=home_city,
+                            home_cities=home_cities,
                             min_photos=trip_min_photos,
                             year_range=year_range,
                             logger=logger,

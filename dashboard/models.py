@@ -50,7 +50,7 @@ class UserInfo(BaseModel):
     name: str
     ntfy_topic: str
     enabled: bool = True
-    home_city: str = ""
+    home_cities: List[str] = Field(default_factory=list)
     album_names: List[str] = Field(default_factory=list)
 
 

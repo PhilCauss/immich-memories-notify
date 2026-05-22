@@ -49,21 +49,25 @@ def _normalize_city(name: str) -> str:
     return "".join(c for c in nfkd if not unicodedata.combining(c)).strip()
 
 
-def _is_home_city(city: str, home_city: str) -> bool:
-    """Check if city matches home_city using containment + fuzzy matching."""
-    if not home_city:
+def _is_home_city(city: str, home_cities) -> bool:
+    """Check if city matches any home city using containment + fuzzy matching."""
+    if not home_cities:
         return False
+    if isinstance(home_cities, str):
+        home_cities = [home_cities] if home_cities else []
     c = _normalize_city(city)
-    h = _normalize_city(home_city)
-    # Exact match
-    if c == h:
-        return True
-    # Containment: only when the shorter string is at least 4 chars
-    # to avoid false positives like "Al" matching "Dallas"
-    if len(h) >= 4 and len(c) >= 4 and (h in c or c in h):
-        return True
     from difflib import SequenceMatcher
-    return SequenceMatcher(None, c, h).ratio() >= 0.8
+    for home_city in home_cities:
+        h = _normalize_city(home_city)
+        if not h:
+            continue
+        if c == h:
+            return True
+        if len(h) >= 4 and len(c) >= 4 and (h in c or c in h):
+            return True
+        if SequenceMatcher(None, c, h).ratio() >= 0.8:
+            return True
+    return False
 
 
 def _cluster_trip_dates(assets_with_dates: list, max_gap_days: int = 5) -> list:
@@ -96,7 +100,7 @@ def find_trip_candidate(
     immich_url: str,
     api_key: str,
     target_date: date,
-    home_city: str = "",
+    home_cities=None,
     min_photos: int = 5,
     year_range: int = 5,
     logger=None,
@@ -121,7 +125,7 @@ def find_trip_candidate(
                 country = (exif.get("country") or "").strip()
                 if not city:
                     continue
-                if _is_home_city(city, home_city):
+                if _is_home_city(city, home_cities):
                     continue
                 # Extract date for clustering
                 raw_date = asset.get("localDateTime") or asset.get("fileCreatedAt") or asset.get("createdAt")

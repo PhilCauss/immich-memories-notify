@@ -1311,7 +1311,7 @@
                 document.getElementById('users-list').innerHTML = data.users.map(user => {
                     const sn = escapeHtml(user.name);
                     const st = escapeHtml(user.ntfy_topic);
-                    const sc = escapeHtml(user.home_city || '');
+                    const homeCities = user.home_cities || (user.home_city ? [user.home_city] : []);
                     const safeId = user.name.replace(/[^a-zA-Z0-9]/g, '-');
                     const jsName = user.name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                     return `
@@ -1328,18 +1328,14 @@
                         </div>
                         <div style="position: relative; margin-top: 6px;">
                             <div style="display: flex; align-items: center; gap: 8px;">
-                                <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap;">Home City:</label>
-                                <input type="text" placeholder="Select from photos or type manually"
-                                    id="home-city-input-${safeId}"
-                                    value="${sc}"
-                                    style="flex: 1; padding: 3px 7px; font-size: 0.8rem; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text);"
-                                    onchange="setHomeCity('${jsName}', this.value)"
-                                    onkeydown="if(event.key==='Enter'){this.blur();}">
+                                <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap;">Home Cities:</label>
+                                <div id="city-tags-${safeId}" style="flex: 1; display: flex; flex-wrap: wrap; gap: 4px; min-height: 24px; align-items: center;">
+                                    ${homeCities.map(c => `<span style="background: var(--accent); color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem;">${escapeHtml(c)}</span>`).join('') || '<span style="font-size: 0.8rem; color: var(--text-muted);">None</span>'}
+                                </div>
                                 <button class="secondary" style="padding: 3px 8px; font-size: 0.75rem; white-space: nowrap;"
                                     onclick="toggleCityDropdown('${jsName}', this)">&#9660;</button>
-                                <span id="home-city-saved-${safeId}" style="font-size: 0.75rem; color: #4caf50; display: none;">&#10003;</span>
                             </div>
-                            <div id="city-dropdown-${safeId}" class="city-dropdown" style="display:none; position:absolute; left:70px; right:40px; top:100%; z-index:100; max-height:200px; overflow-y:auto; background:var(--bg-secondary); border:1px solid var(--border); border-radius:4px; box-shadow:0 4px 12px rgba(0,0,0,0.3);"></div>
+                            <div id="city-dropdown-${safeId}" class="city-dropdown" style="display:none; position:absolute; left:85px; right:40px; top:100%; z-index:100; max-height:200px; overflow-y:auto; background:var(--bg-secondary); border:1px solid var(--border); border-radius:4px; box-shadow:0 4px 12px rgba(0,0,0,0.3);"></div>
                         </div>
                         <div style="position: relative; margin-top: 6px;">
                             <div style="display: flex; align-items: center; gap: 8px;">
@@ -1660,36 +1656,19 @@
             }
         }
 
-        async function setHomeCity(userName, city) {
-            try {
-                await api(`/settings/users/${encodeURIComponent(userName)}/home_city`, {
-                    method: 'PUT',
-                    body: JSON.stringify({ home_city: city }),
-                });
-                const indicator = document.getElementById(`home-city-saved-${userName.replace(/\s+/g, '-')}`);
-                if (indicator) {
-                    indicator.style.display = 'inline';
-                    setTimeout(() => { indicator.style.display = 'none'; }, 2000);
-                }
-            } catch (e) {
-                showAlert('settings-alert', e.message, 'error');
-            }
-        }
-
         const _citiesCache = {};
+        let _userCitySelections = {};
 
         async function toggleCityDropdown(userName, btn) {
             const slug = userName.replace(/\s+/g, '-');
             const dropdown = document.getElementById(`city-dropdown-${slug}`);
             if (!dropdown) return;
 
-            // Toggle off if already open
             if (dropdown.style.display !== 'none') {
                 dropdown.style.display = 'none';
                 return;
             }
 
-            // Close any other open dropdowns
             document.querySelectorAll('.city-dropdown').forEach(d => d.style.display = 'none');
 
             btn.disabled = true;
@@ -1699,13 +1678,27 @@
                     const data = await api(`/settings/users/${encodeURIComponent(userName)}/cities`);
                     _citiesCache[userName] = data.cities;
                 }
+
+                if (!_userCitySelections[userName]) {
+                    const settingsData = await api('/settings/');
+                    const user = settingsData.users.find(u => u.name === userName);
+                    _userCitySelections[userName] = new Set(user?.home_cities || []);
+                }
+
+                const selected = _userCitySelections[userName];
                 const jsUserName = userName.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-                dropdown.innerHTML = _citiesCache[userName].map(c =>
-                    `<div style="padding:5px 10px; cursor:pointer; font-size:0.85rem; border-bottom:1px solid var(--border);"
-                          onmouseover="this.style.background='var(--accent)'; this.style.color='white';"
-                          onmouseout="this.style.background=''; this.style.color='';"
-                          onclick="selectCity('${jsUserName}', this.textContent)">${escapeHtml(c)}</div>`
-                ).join('');
+                dropdown.innerHTML = _citiesCache[userName].map(c => {
+                    const checked = selected.has(c) ? 'checked' : '';
+                    return `<label style="display:flex; align-items:center; gap:8px; padding:5px 10px; cursor:pointer; font-size:0.85rem; border-bottom:1px solid var(--border);"
+                                  onmouseover="this.style.background='var(--accent)'; this.style.color='white';"
+                                  onmouseout="this.style.background=''; this.style.color='';">
+                        <input type="checkbox" ${checked} onchange="toggleCitySelection('${jsUserName}', '${escapeHtml(c).replace(/'/g, "\\'")}', this.checked)">
+                        ${escapeHtml(c)}
+                    </label>`;
+                }).join('');
+                if (_citiesCache[userName].length === 0) {
+                    dropdown.innerHTML = '<div style="padding:10px; color:var(--text-muted); font-size:0.85rem;">No cities found in photos</div>';
+                }
                 dropdown.style.display = 'block';
             } catch (e) {
                 showAlert('settings-alert', `Failed to load cities: ${e.message}`, 'error');
@@ -1715,15 +1708,30 @@
             }
         }
 
-        function selectCity(userName, city) {
-            const slug = userName.replace(/\s+/g, '-');
-            const input = document.getElementById(`home-city-input-${slug}`);
-            const dropdown = document.getElementById(`city-dropdown-${slug}`);
-            if (input) {
-                input.value = city;
-                setHomeCity(userName, city);
+        async function toggleCitySelection(userName, city, isChecked) {
+            if (!_userCitySelections[userName]) _userCitySelections[userName] = new Set();
+            if (isChecked) {
+                _userCitySelections[userName].add(city);
+            } else {
+                _userCitySelections[userName].delete(city);
             }
-            if (dropdown) dropdown.style.display = 'none';
+
+            const homeCities = Array.from(_userCitySelections[userName]);
+            try {
+                await api(`/settings/users/${encodeURIComponent(userName)}/home_cities`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ home_cities: homeCities }),
+                });
+                const slug = userName.replace(/\s+/g, '-');
+                const tagsEl = document.getElementById(`city-tags-${slug}`);
+                if (tagsEl) {
+                    tagsEl.innerHTML = homeCities.length
+                        ? homeCities.map(c => `<span style="background: var(--accent); color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem;">${escapeHtml(c)}</span>`).join('')
+                        : '<span style="font-size: 0.8rem; color: var(--text-muted);">None</span>';
+                }
+            } catch (e) {
+                showAlert('settings-alert', `Failed to save home cities: ${e.message}`, 'error');
+            }
         }
 
         // Close dropdowns when clicking outside
