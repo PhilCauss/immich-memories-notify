@@ -756,9 +756,12 @@
     <!-- ============================================================ -->
 
     <header>
-        <div class="container">
-            <h1>Immich Memories Notify</h1>
-            <p>Dashboard for managing memory notifications</p>
+        <div class="container" style="display: flex; align-items: center; justify-content: space-between;">
+            <div>
+                <h1>Immich Memories Notify</h1>
+                <p>Dashboard for managing memory notifications</p>
+            </div>
+            <div id="version-info" style="text-align: right; font-size: 0.8rem; color: var(--text-muted);"></div>
         </div>
     </header>
 
@@ -2117,6 +2120,25 @@
             }
         }
 
+        async function checkVersion() {
+            const el = document.getElementById('version-info');
+            try {
+                const resp = await fetch('/health');
+                const health = await resp.json();
+                const current = health.version || '?';
+                el.innerHTML = `v${current}`;
+                const gh = await fetch('https://api.github.com/repos/ismaildakrory/immich-memories-notify/releases/latest');
+                if (!gh.ok) return;
+                const data = await gh.json();
+                const latest = (data.tag_name || '').replace(/^v/, '');
+                if (latest && latest !== current) {
+                    el.innerHTML = `v${current} · <a href="${data.html_url}" target="_blank" style="color: var(--warning); text-decoration: none;">v${latest} available</a>`;
+                }
+            } catch (e) {
+                el.textContent = '';
+            }
+        }
+
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
             refreshState();
@@ -2125,6 +2147,7 @@
             initTestSlots();
             checkSetup();
             initWizard();
+            checkVersion();
         });
 
         // ============================================================

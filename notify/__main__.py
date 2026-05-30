@@ -245,7 +245,9 @@ def process_user_slot(
 
                 if not notification and tan_ready:
                     try:
-                        used_persons = state.get("users", {}).get(name, {}).get("tan_persons_used", [])
+                        user_tan_state = state.get("users", {}).get(name, {})
+                        used_persons = user_tan_state.get("tan_persons_used", [])
+                        used_pairs = user_tan_state.get("tan_pairs_used", [])
                         candidate = find_then_and_now_candidate(
                             immich_url=immich_url,
                             api_key=api_key,
@@ -255,6 +257,7 @@ def process_user_slot(
                             year_range=year_range,
                             logger=logger,
                             used_person_ids=used_persons,
+                            used_pairs=used_pairs,
                         )
                         if candidate:
                             notification = prepare_then_and_now_notification(
@@ -400,13 +403,17 @@ def process_user_slot(
                 mark_feature_fired(state, name, "last_trip_date", target_date)
             elif notification.get("is_then_and_now"):
                 mark_feature_fired(state, name, "last_tan_date", target_date)
-                # Track TaN person freshness
                 user_state = state.setdefault("users", {}).setdefault(name, {})
-                used = user_state.setdefault("tan_persons_used", [])
                 person_id = notification.get("person_id", "")
                 if person_id:
+                    used = user_state.setdefault("tan_persons_used", [])
                     used.append(person_id)
                     user_state["tan_persons_used"] = used[-20:]
+                pair_key = notification.get("tan_pair_key", "")
+                if pair_key:
+                    pairs = user_state.setdefault("tan_pairs_used", [])
+                    pairs.append(pair_key)
+                    user_state["tan_pairs_used"] = pairs[-50:]
     else:
         result["success"] = False
 

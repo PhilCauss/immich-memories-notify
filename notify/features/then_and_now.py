@@ -29,6 +29,7 @@ def find_then_and_now_candidate(
     year_range: int = 5,
     logger=None,
     used_person_ids: list = None,
+    used_pairs: list = None,
 ) -> Optional[dict]:
     """
     Search top persons for the same person appearing in the same calendar month
@@ -41,6 +42,7 @@ def find_then_and_now_candidate(
     target_year = target_date.year
     min_year = target_year - year_range
     used = set(used_person_ids or [])
+    used_pair_set = set(used_pairs or [])
 
     candidates = []
 
@@ -90,8 +92,30 @@ def find_then_and_now_candidate(
         then_year = min(years)
         now_year = max(years)
 
-        then_asset_id = year_assets[then_year][0]
-        now_asset_id = year_assets[now_year][-1]
+        # Try random combos, skip already-used pairs
+        then_options = year_assets[then_year][:]
+        now_options = year_assets[now_year][:]
+        random.shuffle(then_options)
+        random.shuffle(now_options)
+
+        picked = False
+        for t_id in then_options:
+            for n_id in now_options:
+                pair_key = f"{t_id}:{n_id}"
+                if pair_key in used_pair_set:
+                    continue
+                then_asset_id = t_id
+                now_asset_id = n_id
+                picked = True
+                break
+            if picked:
+                break
+
+        if not picked:
+            # All combos used — pick random anyway (better than skipping)
+            then_asset_id = random.choice(then_options)
+            now_asset_id = random.choice(now_options)
+            pair_key = f"{then_asset_id}:{now_asset_id}"
 
         try:
             then_details = fetch_asset_details(immich_url, api_key, then_asset_id)
@@ -114,6 +138,7 @@ def find_then_and_now_candidate(
             "now_asset_id": now_asset_id,
             "then_faces": then_faces,
             "now_faces": now_faces,
+            "pair_key": pair_key,
         })
 
     if not candidates:
@@ -293,5 +318,6 @@ def prepare_then_and_now_notification(
         "is_then_and_now": True,
         "is_video": False,
         "person_id": candidate.get("person_id", ""),
+        "tan_pair_key": candidate.get("pair_key", ""),
         "composite_image": composite,  # fallback thumbnail while Immich processes the upload
     }
