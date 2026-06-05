@@ -1508,7 +1508,8 @@
                     method: 'PUT',
                     body: JSON.stringify(settings),
                 });
-                showAlert('settings-alert', 'Settings saved successfully');
+                await api('/restart/scheduler', { method: 'POST' }).catch(() => {});
+                showAlert('settings-alert', 'Settings saved and scheduler restarted');
                 _memorySlots = settings.memory_notifications;
                 _configuredSlots = _memorySlots + settings.person_notifications;
                 initTestSlots();
