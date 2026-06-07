@@ -35,12 +35,7 @@ cd immich-memories-notify
 bash setup.sh
 ```
 
-The setup script generates your config, optionally starts a bundled ntfy server, and launches the dashboard. A wizard walks you through connecting Immich, ntfy, and adding your first user.
-
-Then start the scheduler:
-```bash
-docker compose up -d scheduler
-```
+The setup script generates your config, optionally starts a bundled ntfy server, and launches the dashboard. A wizard walks you through connecting Immich, ntfy, and adding your first user. The scheduler runs automatically inside the dashboard container.
 
 ## Screenshots
 
@@ -69,9 +64,9 @@ docker compose run --rm notify --slot 1 --dry-run --no-delay
 docker compose run --rm notify --slot 1 --force --no-delay
 
 # Logs
-docker compose logs -f scheduler
+docker compose logs -f dashboard
 
-# Rebuild dashboard after code changes
+# Rebuild after code changes
 docker compose down dashboard && docker compose up -d --build dashboard
 ```
 
@@ -176,6 +171,18 @@ Set in `.env` to password-protect the dashboard:
 DASHBOARD_TOKEN=your-secret-token
 ```
 If not set, the dashboard is open (fine for local network).
+
+## Upgrading from v2.4.x
+
+v2.5.0 merges the scheduler into the dashboard container. To upgrade:
+
+```bash
+git pull
+docker compose down --remove-orphans
+docker compose up -d --build dashboard
+```
+
+The old `scheduler` container is no longer needed. If you skip `docker compose down` and just rebuild, the dashboard will automatically stop the old scheduler on startup to prevent double notifications.
 
 ## Troubleshooting
 

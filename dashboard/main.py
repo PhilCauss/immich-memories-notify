@@ -7,12 +7,13 @@ FastAPI web dashboard for managing notifications.
 import logging
 import os
 import secrets as stdlib_secrets
+import subprocess
 from pathlib import Path
 
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 
 from .models import HealthResponse
 from .routers import settings, state, test, secrets, restart, ntfy
@@ -111,9 +112,25 @@ app.include_router(
 
 
 # Health endpoint (no auth required)
-@app.get("/health", response_model=HealthResponse, tags=["health"])
+@app.get("/health", tags=["health"])
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint — includes crond liveness."""
+    result = subprocess.run(["pidof", "crond"], capture_output=True, text=True)
+    crond_ok = False
+    if result.returncode == 0:
+        for pid in result.stdout.strip().split():
+            try:
+                stat = Path(f"/proc/{pid}/status").read_text()
+                if "zombie" not in stat.lower():
+                    crond_ok = True
+                    break
+            except (FileNotFoundError, PermissionError):
+                pass
+    if not crond_ok:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "version": APP_VERSION, "detail": "crond not running"},
+        )
     return HealthResponse(status="healthy", version=APP_VERSION)
 
 

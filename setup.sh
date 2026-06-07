@@ -415,8 +415,7 @@ if [ "$START_NOW" = "y" ]; then
     echo -e "  Open the dashboard: ${BOLD}${CYAN}${DASHBOARD_URL}${NC}"
     echo ""
     echo "  The setup wizard will appear automatically."
-    echo "  After completing it, start the scheduler:"
-    echo -e "  ${BOLD}docker compose up -d scheduler${NC}"
+    echo "  The scheduler runs automatically inside the dashboard."
 else
     echo ""
     echo "  When ready, start the services:"
@@ -428,8 +427,6 @@ else
     echo ""
     echo "  Then open: ${BOLD}http://localhost:5000${NC}"
     echo "  The setup wizard will appear automatically."
-    echo ""
-    echo "  After the wizard, start the scheduler:"
-    echo -e "    ${BOLD}docker compose up -d scheduler${NC}"
+    echo "  The scheduler runs automatically inside the dashboard."
 fi
 echo ""

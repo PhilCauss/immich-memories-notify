@@ -22,7 +22,7 @@ from ..models import (
     UserEnabledUpdate,
 )
 from ..utils.filelock import exclusive_lock, read_lock, write_lock
-from .restart import docker_compose_restart
+from ..crontab import reload_scheduler
 
 router = APIRouter()
 
@@ -177,9 +177,9 @@ async def update_windows(request: Request, update: WindowsUpdate, background_tas
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Config file not found")
 
-    background_tasks.add_task(docker_compose_restart, ["scheduler"])
+    background_tasks.add_task(reload_scheduler, config_path)
 
-    return {"message": "Windows updated, scheduler restarting", "count": len(update.notification_windows)}
+    return {"message": "Windows updated, scheduler reloaded", "count": len(update.notification_windows)}
 
 
 @router.get("/messages")

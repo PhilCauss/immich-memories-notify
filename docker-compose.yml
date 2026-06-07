@@ -7,8 +7,7 @@
 #   docker compose run --rm notify --slot 1 --test       # Test mode
 #   docker compose run --rm notify --slot 1 --dry-run    # Preview only
 #   docker compose run --rm notify --slot 1 --no-delay   # Skip random delay
-#   docker compose up -d scheduler                       # Start scheduler
-#   docker compose up -d dashboard                       # Start web dashboard
+#   docker compose up -d dashboard                       # Start app
 #
 # SLOTS:
 #   Slot 1-3: Memory notifications (if memories exist) or person photos
@@ -21,6 +20,7 @@
 # DASHBOARD:
 #   - Access at http://localhost:5000
 #   - Set DASHBOARD_TOKEN env var for authentication
+#   - Scheduler runs embedded (crond inside this container)
 #
 # ============================================================
 
@@ -45,76 +45,21 @@ services:
     restart: "no"
 
   # ------------------------------------------------------------
-  # Scheduler Service - Reads config from config.yaml
-  # ------------------------------------------------------------
-  scheduler:
-    build: .
-    container_name: immich-memories-scheduler
-    volumes:
-      - ./notify:/app/notify:ro
-      - ./config.yaml:/app/config.yaml:ro
-      - ./VERSION:/app/VERSION:ro
-      - ./state:/app/state
-      - ./custom_templates:/app/custom_templates
-      - /etc/localtime:/etc/localtime:ro
-    env_file: .env
-    environment:
-      - TZ=${TZ:-UTC}
-    network_mode: host
-    restart: unless-stopped
-    entrypoint: /bin/sh
-    command:
-      - -c
-      - |
-        echo "========================================"
-        echo "Immich Memories Notify - Scheduler"
-        echo "========================================"
-        echo ""
-        # Generate crontab from config.yaml using Python
-        python -c "
-        import yaml
-        with open('config.yaml') as f:
-            config = yaml.safe_load(f)
-        windows = config.get('settings', {}).get('notification_windows', [])
-        print('Notification windows (random time within each):')
-        for i, w in enumerate(windows, 1):
-            start = w.get('start', '08:00')
-            end = w.get('end', '10:00')
-            # Generate cron from start time (e.g., '08:00' -> '0 8 * * *')
-            h, m = start.split(':')
-            cron = f'{int(m)} {int(h)} * * *'
-            print(f'  Slot {i}: {start}-{end} (triggers at {start})')
-        print()
-        # Write crontab
-        with open('/etc/crontabs/root', 'w') as f:
-            for i, w in enumerate(windows, 1):
-                start = w.get('start', '08:00')
-                h, m = start.split(':')
-                cron = f'{int(m)} {int(h)} * * *'
-                f.write(f'{cron} cd /app && python -m notify --slot {i} >> /proc/1/fd/1 2>&1\n')
-            f.write('0 6 * * * cd /app && python -m notify --check-updates >> /proc/1/fd/1 2>&1\n')
-        "
-        echo "Starting scheduler..."
-        crond -f -l 2
-
-  # ------------------------------------------------------------
-  # Dashboard Service - Web UI for managing notifications
+  # Dashboard + Scheduler (single container)
   # ------------------------------------------------------------
   dashboard:
     build:
       context: .
       dockerfile: Dockerfile.dashboard
     container_name: immich-memories-dashboard
-    # Note: ports directive is ignored with network_mode: host
-    # Dashboard binds directly on host port 5000
     volumes:
       - ./config.yaml:/app/config.yaml
       - ./state:/app/state
       - ./notify:/app/notify:ro
+      - ./VERSION:/app/VERSION:ro
       - ./custom_templates:/app/custom_templates:ro
       - ./.env:/app/.env
       - /var/run/docker.sock:/var/run/docker.sock
-      - .:/app/project:ro
       - /etc/localtime:/etc/localtime:ro
     env_file: .env
     environment:
@@ -122,10 +67,7 @@ services:
       - CONFIG_PATH=/app/config.yaml
       - STATE_PATH=/app/state/state.json
       - ENV_PATH=/app/.env
-      - PROJECT_DIR=/app/project
-      - COMPOSE_PROJECT_NAME=memnotify
       - DASHBOARD_USER=${DASHBOARD_USER:-admin}
       - DASHBOARD_TOKEN=${DASHBOARD_TOKEN:-}
-      - DOCKER_API_VERSION=${DOCKER_API_VERSION:-}
     network_mode: host
     restart: unless-stopped

@@ -281,7 +281,7 @@ async def update_secrets(update: SecretsUpdate):
         "message": "Secrets updated" if updated else "No changes made",
         "updated_fields": updated,
         "restart_required": bool(updated),
-        "restart_command": "docker compose restart scheduler dashboard" if updated else None,
+        "restart_command": "docker compose restart dashboard" if updated else None,
     }
 
 

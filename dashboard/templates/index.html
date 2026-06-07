@@ -739,11 +739,8 @@
                 <p class="wizard-subtitle" style="text-align:center;">Here's what was configured:</p>
                 <ul class="wizard-done-list" id="wz-done-list"></ul>
                 <p style="margin-top:20px; font-size:0.85rem; color:var(--text-muted); text-align:center;">
-                    Start the scheduler to begin receiving daily memory notifications:
+                    The scheduler runs automatically — you'll start receiving daily memory notifications.
                 </p>
-                <code style="display:block; text-align:center; margin-top:8px; font-size:0.85rem; color:var(--accent);">
-                    docker compose up -d scheduler
-                </code>
                 <div class="wizard-nav" style="justify-content:center; margin-top:28px;">
                     <button onclick="wizardDone()" style="padding: 12px 32px; font-size: 1rem;">
                         Go to Dashboard
@@ -1176,7 +1173,7 @@
                 </div>
 
                 <div id="restart-notice" style="display: none; margin-top: 16px; padding: 12px; background: rgba(251, 191, 36, 0.15); border: 1px solid var(--warning); border-radius: 6px; color: var(--warning);">
-                    <strong>Restart Required:</strong> Run <code style="background: var(--bg-color); padding: 2px 6px; border-radius: 4px;">docker compose restart scheduler dashboard</code> to apply changes.
+                    <strong>Restart Required:</strong> Run <code style="background: var(--bg-color); padding: 2px 6px; border-radius: 4px;">docker compose restart dashboard</code> to apply changes.
                 </div>
             </div>
         </div>
@@ -1468,7 +1465,7 @@
                     method: 'PUT',
                     body: JSON.stringify({ notification_windows: windows }),
                 });
-                showAlert('settings-alert', 'Windows saved and scheduler restarted!');
+                showAlert('settings-alert', 'Windows saved and scheduler reloaded!');
                 _windowCount = windows.length;
                 initTestSlots();
             } catch (e) {
@@ -1509,7 +1506,7 @@
                     body: JSON.stringify(settings),
                 });
                 await api('/restart/scheduler', { method: 'POST' }).catch(() => {});
-                showAlert('settings-alert', 'Settings saved and scheduler restarted');
+                showAlert('settings-alert', 'Settings saved and scheduler reloaded');
                 _memorySlots = settings.memory_notifications;
                 _configuredSlots = _memorySlots + settings.person_notifications;
                 initTestSlots();
@@ -2031,7 +2028,7 @@
                         document.getElementById('restart-notice').style.display = 'none';
                     } catch (restartErr) {
                         document.getElementById('restart-notice').style.display = 'block';
-                        showAlert('secrets-alert', `Secrets saved but restart failed. Run: docker compose restart scheduler dashboard`, 'error');
+                        showAlert('secrets-alert', `Secrets saved but restart failed. Run: docker compose restart dashboard`, 'error');
                     }
                 } else {
                     showAlert('secrets-alert', result.message, 'success');

@@ -1,10 +1,10 @@
-# Immich Memories Notify - Dashboard
-# FastAPI web dashboard for managing notifications
+# Immich Memories Notify - Dashboard + Scheduler
+# Single container: FastAPI dashboard + crond scheduler
 
 FROM python:3.11-alpine
 
-# Install Docker CLI for restart functionality and apply OS patches
-RUN apk add --no-cache docker-cli docker-cli-compose && apk upgrade --no-cache
+# Install Docker CLI for ntfy management and apply OS patches
+RUN apk add --no-cache docker-cli && apk upgrade --no-cache
 
 # Install Python dependencies
 COPY requirements.txt requirements-dashboard.txt /tmp/
@@ -13,16 +13,18 @@ RUN pip install --no-cache-dir -r /tmp/requirements-dashboard.txt && rm /tmp/req
 # Create app directory
 WORKDIR /app
 
-# Copy dashboard code
+# Copy application code
 COPY VERSION /app/VERSION
 COPY dashboard/ /app/dashboard/
 COPY notify/ /app/notify/
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 # Expose port
 EXPOSE 5000
 
-# Health check
+# Health check — verifies both uvicorn and crond are running
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:5000/health || exit 1
 
-CMD ["uvicorn", "dashboard.main:app", "--host", "0.0.0.0", "--port", "5000"]
+CMD ["/app/entrypoint.sh"]
