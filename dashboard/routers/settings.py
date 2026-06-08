@@ -34,13 +34,16 @@ def get_config_path(request: Request) -> str:
 
 def load_config(config_path: str) -> dict:
     """Load configuration from YAML file (shared lock)."""
+    if not Path(config_path).is_file():
+        return {"immich": {}, "ntfy": {}, "users": [], "settings": {}}
     with read_lock(config_path):
         with open(config_path) as f:
-            return yaml.safe_load(f)
+            return yaml.safe_load(f) or {}
 
 
 def save_config(config_path: str, config: dict):
     """Save configuration to YAML file (exclusive lock)."""
+    Path(config_path).parent.mkdir(parents=True, exist_ok=True)
     with write_lock(config_path):
         with open(config_path, 'w') as f:
             yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
@@ -55,8 +58,10 @@ def load_config_exclusive(config_path: str) -> tuple:
             # modify config...
             _write_yaml(config_path, config)
     """
+    if not Path(config_path).is_file():
+        return {"immich": {}, "ntfy": {}, "users": [], "settings": {}}
     with open(config_path) as f:
-        return yaml.safe_load(f)
+        return yaml.safe_load(f) or {}
 
 
 def _write_yaml(config_path: str, config: dict):

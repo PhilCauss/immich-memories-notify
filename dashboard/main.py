@@ -148,6 +148,8 @@ async def dashboard_ui(username: str = Depends(verify_credentials)):
 @app.on_event("startup")
 async def startup_event():
     """Initialize app state."""
+    from .crontab import ensure_config
+    ensure_config(CONFIG_PATH)
     app.state.config_path = CONFIG_PATH
     app.state.state_path = STATE_PATH
     if not DASHBOARD_TOKEN:
