@@ -184,6 +184,12 @@ docker compose up -d --build dashboard
 
 The old `scheduler` container is no longer needed. If you skip `docker compose down` and just rebuild, the dashboard will automatically stop the old scheduler on startup to prevent double notifications.
 
+> **Bundled ntfy users:** `docker compose down` stops all containers including ntfy. Make sure to restart it alongside the dashboard:
+> ```bash
+> docker compose up -d --build dashboard ntfy
+> ```
+> Or simply `docker compose up -d --build` to restart everything.
+
 ## Troubleshooting
 
 | Problem | Fix |
