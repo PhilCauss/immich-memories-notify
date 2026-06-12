@@ -90,6 +90,7 @@ def process_user_slot(
         return result
 
     immich_url = config["immich"]["url"]
+    external_immich_url = config["immich"].get("external_url", immich_url)
     retry_config = config["settings"]["retry"]
     messages = config.get("messages", [])
     person_messages = config.get("person_messages", [])
@@ -231,6 +232,7 @@ def process_user_slot(
                             notification = prepare_trip_notification(
                                 trip=trip,
                                 immich_url=immich_url,
+                                external_immich_url=external_immich_url,
                                 api_key=api_key,
                                 messages=trip_messages,
                                 test_mode=test_mode,

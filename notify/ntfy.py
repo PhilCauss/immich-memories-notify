@@ -117,6 +117,7 @@ def send_single_notification(
     asset_id = notification.get("asset_id")
 
     immich_url = config["immich"]["url"]
+    external_immich_url = config["immich"].get("external_url", immich_url)
     ntfy_url = config["ntfy"]["url"]
     topic = user["ntfy_topic"]
     retry_config = config["settings"]["retry"]
@@ -153,9 +154,9 @@ def send_single_notification(
         click_url = notification.get("click_url")
         if not click_url:
             if asset_id:
-                click_url = f"https://my.immich.app/photos/{asset_id}"
+                click_url = f"{external_immich_url}/photos/{asset_id}"
             else:
-                click_url = "https://my.immich.app/"
+                click_url = f"{external_immich_url}/"
         is_video = notification.get("is_video", False)
         success = with_retry(
             lambda: send_notification(
