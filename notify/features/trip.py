@@ -146,22 +146,34 @@ def find_trip_candidate(
         cluster_ids = _cluster_trip_dates(assets_dates, max_gap_days=5)
         if len(cluster_ids) < min_photos:
             continue
-        if len(cluster_ids) > best_count or (len(cluster_ids) == best_count and best and year < best["year"]):
+        if len(cluster_ids) > best_count or (
+            len(cluster_ids) == best_count and best and year < best["year"]
+        ):
             best_count = len(cluster_ids)
-            best = {"city": city, "country": country, "year": year,
-                    "gap": current_year - year, "asset_ids": cluster_ids}
+            best = {
+                "city": city,
+                "country": country,
+                "year": year,
+                "gap": current_year - year,
+                "asset_ids": cluster_ids,
+            }
 
     if best and logger:
-        logger.info(f"  Trip candidate: {best['city']}, {best['country']} "
-                    f"({best['year']}, {best_count} photos)")
+        logger.info(
+            f"  Trip candidate: {best['city']}, {best['country']} "
+            f"({best['year']}, {best_count} photos)"
+        )
     elif logger:
-        logger.debug(f"  No trip candidate (need {min_photos}+ photos in same city within 5 days, past {year_range} years)")
+        logger.debug(
+            f"  No trip candidate (need {min_photos}+ photos in same city within 5 days, past {year_range} years)"
+        )
     return best
 
 
 def prepare_trip_notification(
     trip: dict,
     immich_url: str,
+    external_immich_url: str,
     api_key: str,
     messages: list,
     test_mode: bool,
@@ -279,7 +291,7 @@ def prepare_trip_notification(
         "message": message,
         "has_content": True,
         "asset_id": uploaded_asset_id,
-        "click_url": f"https://my.immich.app/photos/{click_asset}",
+        "click_url": f"{external_immich_url}/photos/{click_asset}",
         "is_trip": True,
         "is_video": False,
         "collage_data": collage,
