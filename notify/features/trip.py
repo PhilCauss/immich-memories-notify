@@ -146,9 +146,7 @@ def find_trip_candidate(
         cluster_ids = _cluster_trip_dates(assets_dates, max_gap_days=5)
         if len(cluster_ids) < min_photos:
             continue
-        if len(cluster_ids) > best_count or (
-            len(cluster_ids) == best_count and best and year < best["year"]
-        ):
+        if len(cluster_ids) > best_count or (len(cluster_ids) == best_count and best and year < best["year"]):
             best_count = len(cluster_ids)
             best = {
                 "city": city,
