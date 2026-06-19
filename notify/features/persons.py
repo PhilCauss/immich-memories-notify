@@ -4,7 +4,8 @@ import logging
 import random
 from typing import Optional
 
-from ..immich import fetch_asset_details, get_random_person_photo
+from ..immich import fetch_asset_details, fetch_thumbnail, get_random_person_photo
+from ..llm import generate_title
 from ..utils import format_location, get_primary_album
 
 
@@ -101,9 +102,27 @@ def prepare_person_notification(
     if album_name and album_name not in message and random.random() < 0.33:
         message = f"{message}\n📁 {album_name}"
 
-    # Build title from template
+    # Build title: try LLM first, fall back to templates
     video_emoji = settings.get("video_emoji", False)
-    if title_templates:
+
+    llm_title = None
+    if not is_video and asset_id:
+        try:
+            image_bytes = fetch_thumbnail(
+                immich_url=immich_url,
+                api_key=api_key,
+                asset_id=asset_id,
+                timeout=30,
+                size="preview",
+            )
+            llm_title = generate_title(image_bytes, person_name, config=None)
+        except Exception as e:
+            if logger:
+                logger.debug(f"LLM title generation failed for {person_name}: {e}")
+
+    if llm_title:
+        title = llm_title
+    elif title_templates:
         title_template = random.choice(title_templates)
         try:
             title = title_template.format(person_name=person_name)
