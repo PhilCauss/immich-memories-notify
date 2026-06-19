@@ -1,6 +1,10 @@
 immich:
-  url: ${IMMICH_URL}
-  external_url: ${IMMICH_EXTERNAL_URL}
+    url: ${IMMICH_URL}
+    external_url: ${IMMICH_EXTERNAL_URL}
+llm:
+  url: ${LLM_URL}
+  model: ${LLM_MODEL}
+  api_key: ${LLM_API_KEY}
 ntfy:
   url: ${NTFY_URL}
   external_url: ${NTFY_EXTERNAL_URL}

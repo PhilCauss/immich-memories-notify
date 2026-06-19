@@ -145,7 +145,7 @@ def process_user_slot(
                     break
 
     # Parse memories by year
-    parsed = parse_memories(todays) if todays else {"years": [], "by_year": {}}
+    parsed = parse_memories(todays, immich_url, api_key) if todays else {"years": [], "by_year": {}}
     has_memories = bool(parsed["years"])
 
     if has_memories:

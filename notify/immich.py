@@ -11,6 +11,8 @@ from typing import List, Optional
 
 import requests
 
+from .llm import validate_image
+
 
 # =============================================================================
 # Memories API
@@ -32,8 +34,17 @@ def filter_todays_memories(memories: list, target_date: date = None) -> list:
     return [m for m in memories if m.get("showAt", "").startswith(target_str)]
 
 
-def parse_memories(memories: list) -> dict:
-    """Parse memories into a structured format."""
+def parse_memories(memories: list, immich_url: str = None, api_key: str = None) -> dict:
+    """Parse memories into a structured format, optionally validating image quality.
+
+    Args:
+        memories: List of memory dicts from the Immich API.
+        immich_url: Base URL of the Immich instance (required for validation).
+        api_key: Immich API key (required for validation).
+
+    Returns:
+        Structured dict with memory statistics and assets.
+    """
     result = {
         "total_assets": 0,
         "image_count": 0,
@@ -53,6 +64,21 @@ def parse_memories(memories: list) -> dict:
             asset_type = asset.get("type", "IMAGE")
 
             if asset_id:
+                # Skip non-video assets that fail LLM validation
+                if asset_type != "VIDEO" and immich_url and api_key:
+                    try:
+                        thumbnail = fetch_thumbnail(immich_url, api_key, asset_id)
+                        validation_result = validate_image(thumbnail)
+                        if validation_result is False:
+                            logging.getLogger("immich-memories-notify").info(
+                                f"  Discarded asset {asset_id}: image validation failed"
+                            )
+                            continue
+                    except Exception as e:
+                        logging.getLogger("immich-memories-notify").warning(
+                            f"  Image validation failed for asset {asset_id}: {e}, keeping anyway"
+                        )
+
                 result["by_year"][year]["assets"].append(asset)
                 if result["first_asset_id"] is None:
                     result["first_asset_id"] = asset_id
