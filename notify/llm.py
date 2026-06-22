@@ -106,7 +106,9 @@ def validate_image(image_data: bytes, config: dict = None) -> bool | None:
         return None
 
 
-def generate_title(image_data: bytes, person_name: str, config: dict = None) -> str | None:
+def generate_title(
+    image_data: bytes, person_name: str, config: dict = None
+) -> str | None:
     """
     Generate a fun, short title from an image using the LLM.
 
@@ -183,7 +185,7 @@ def generate_title(image_data: bytes, person_name: str, config: dict = None) -> 
         title = result["choices"][0]["message"]["content"].strip()
 
         # Clean up quotes/wrapping
-        title = title.strip('"\'')
+        title = title.strip("\"'")
         logger.info(f"LLM title for {person_name}: {title}")
         return title
 

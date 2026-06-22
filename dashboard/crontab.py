@@ -214,7 +214,7 @@ def generate_crontab(config_path: str = "/app/config.yaml"):
     with open("/etc/crontabs/root", "w") as f:
         for i, w in enumerate(windows, 1):
             h, m = w.get("start", "08:00").split(":")
-            f.write(f"{int(m)} {int(h)} * * * {prefix} && python -m notify --slot {i} >> /proc/1/fd/1 2>&1\n")
+            f.write(f"{int(m)} {int(h)} * * * {prefix} && python -m notify >> /proc/1/fd/1 2>&1\n")
         f.write(f"0 6 * * * {prefix} && python -m notify --check-updates >> /proc/1/fd/1 2>&1\n")
 
 

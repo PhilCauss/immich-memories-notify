@@ -12,7 +12,6 @@ from typing import List, Optional
 
 from PIL import Image
 
-from ..config import get_slots_sent_today, mark_slot_sent
 from ..immich import (
     fetch_thumbnail,
     get_asset_people,
@@ -396,7 +395,6 @@ def process_collage_slot(
     config: dict,
     state: dict,
     target_date: date,
-    slot: int,
     test_mode: bool = False,
     dry_run: bool = False,
     force: bool = False,
@@ -408,12 +406,6 @@ def process_collage_slot(
         ntfy_user = user.get("ntfy_username")
         ntfy_pass = user.get("ntfy_password")
         ntfy_auth = (ntfy_user, ntfy_pass) if ntfy_user and ntfy_pass else None
-
-        # Check if slot already sent
-        slots_sent = get_slots_sent_today(state, user_name, target_date)
-        if not force and not test_mode and slot in slots_sent:
-            logger.info(f"  [{user_name}] Collage slot {slot} already sent today")
-            return {"success": True, "message": "Already sent"}
 
         settings = config.get("settings", {})
         collage_notification = generate_weekly_collage(
@@ -446,14 +438,12 @@ def process_collage_slot(
         )
 
         if success:
-            if not test_mode:
-                mark_slot_sent(state, user_name, target_date, slot, collage_notification.get("asset_id"))
-            logger.info(f"  [{user_name}] Collage sent for slot {slot}")
+            logger.info(f"  [{user_name}] Collage sent")
         else:
             logger.warning(f"  [{user_name}] Failed to send collage")
 
         return {"success": success, "message": "Sent" if success else "Failed"}
 
     except Exception as e:
-        logger.error(f"Error processing collage slot for {user['name']}: {e}")
+        logger.error(f"Error processing collage for {user['name']}: {e}")
         return {"success": False, "message": str(e)}

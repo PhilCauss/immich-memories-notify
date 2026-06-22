@@ -61,7 +61,6 @@ async def trigger_test_notification(
         sys.executable,
         "-m", "notify",
         "--config", config_path,
-        "--slot", str(slot),
         "--test",
         "--no-delay",
     ]
