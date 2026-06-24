@@ -17,6 +17,7 @@ from ..immich import (
     get_or_create_album,
     upload_collage_to_album,
 )
+from ..llm import generate_title
 from .collage import cover_crop_image
 
 
@@ -286,7 +287,27 @@ def prepare_then_and_now_notification(
     else:
         message = f"{gap} years between these moments with {person_name}"
 
-    if title_templates:
+    # Build title: try LLM first, fall back to templates
+    llm_title = None
+    tan_context = {
+        "person_name": person_name,
+        "then_year": str(then_year),
+        "now_year": str(now_year),
+        "gap": str(gap),
+    }
+    try:
+        llm_title = generate_title(
+            composite, tan_context, event_type="then_and_now", config=None
+        )
+        if llm_title:
+            logger.info(f"  [Then & Now] Using LLM title: {llm_title}")
+    except Exception as e:
+        if logger:
+            logger.info(f"LLM title generation failed for Then & Now: {e}")
+
+    if llm_title:
+        title = llm_title
+    elif title_templates:
         title_template = random.choice(title_templates)
         try:
             title = title_template.format(person_name=person_name, then_year=then_year, now_year=now_year, gap=gap)

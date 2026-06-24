@@ -115,7 +115,9 @@ def prepare_person_notification(
                 timeout=30,
                 size="preview",
             )
-            llm_title = generate_title(image_bytes, person_name, config=None)
+            llm_title = generate_title(
+                image_bytes, {"person_name": person_name}, event_type="person", config=None
+            )
         except Exception as e:
             if logger:
                 logger.info(f"LLM title generation failed for {person_name}: {e}")

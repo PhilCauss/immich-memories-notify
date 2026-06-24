@@ -6,8 +6,8 @@ from pathlib import Path
 
 import requests
 
-PROMPT_PATH = Path(__file__).parent / "image_validation_prompt.txt"
-TITLE_PROMPT_PATH = Path(__file__).parent / "title_generation_prompt.txt"
+PROMPT_PATH = Path(__file__).parent / "prompts" / "image_validation_prompt.txt"
+TITLE_PROMPT_PATH = Path(__file__).parent / "prompts" / "title_generation_prompt_persons.txt"
 
 
 def load_prompt(prompt_path=None):
@@ -106,19 +106,40 @@ def validate_image(image_data: bytes, config: dict = None) -> bool | None:
         return None
 
 
+EVENT_PROMPT_MAP = {
+    "person": TITLE_PROMPT_PATH,
+    "then_and_now": TITLE_PROMPT_PATH.parent / "title_generation_prompt_then_and_now.txt",
+    "trip_highlights": TITLE_PROMPT_PATH.parent / "title_generation_prompt_trip_highlights.txt",
+    "weekly_collage": TITLE_PROMPT_PATH.parent / "title_generation_prompt_weekly_collage.txt",
+}
+
+DEFAULT_TITLE_PROMPT = (
+    "Generate a short, fun title (max 12 words) for a photo notification "
+    "featuring {person_name}. Reply with only the title."
+)
+
+
 def generate_title(
-    image_data: bytes, person_name: str, config: dict = None
+    image_data: bytes,
+    context: dict,
+    event_type: str = "person",
+    config: dict = None,
 ) -> str | None:
     """
     Generate a fun, short title from an image using the LLM.
 
     Reads LLM config from the provided config dict (or from config.yaml
-    if not supplied). The caller only needs to provide the image data
-    and the person's name.
+    if not supplied). The caller provides a dict of context variables
+    that will be substituted into the event-specific prompt.
 
     Args:
         image_data: Raw image bytes.
-        person_name: Name of the person in the photo.
+        context: Dict of context variables to substitute into the prompt.
+                 Keys depend on event_type (e.g. person_name, city, country,
+                 then_year, now_year, gap, person_names, etc.).
+        event_type: Type of event to select the appropriate prompt.
+                   One of: 'person', 'then_and_now', 'trip_highlights',
+                   'weekly_collage'. Defaults to 'person'.
         config: Application config dict (must contain 'llm' section with
                 'url', 'model', 'api_key'). If omitted, loads config.yaml.
 
@@ -141,18 +162,16 @@ def generate_title(
         logger.debug("LLM title generation skipped: no url/model configured")
         return None
 
+    # Load prompt based on event type
+    prompt_path = EVENT_PROMPT_MAP.get(event_type)
     try:
-        prompt = Path(TITLE_PROMPT_PATH).read_text(encoding="utf-8").strip()
+        prompt = Path(prompt_path).read_text(encoding="utf-8").strip()
     except FileNotFoundError:
-        prompt = (
-            "Generate a short, fun title (max 12 words) for a photo notification "
-            "featuring {person_name}. Reply with only the title."
-        )
+        logger.warning(f"Prompt file not found for event_type '{event_type}', using default")
+        prompt = DEFAULT_TITLE_PROMPT
 
-    # Replace the person name placeholder in the prompt
-    prompt = prompt.replace("{person_name}", person_name)
-
-    base64_image = base64.b64encode(image_data).decode("utf-8")
+    # Replace all context placeholders in the prompt
+    prompt = prompt.format(**context)
 
     payload = {
         "model": model,
@@ -186,7 +205,7 @@ def generate_title(
 
         # Clean up quotes/wrapping
         title = title.strip("\"'")
-        logger.info(f"LLM title for {person_name}: {title}")
+        logger.info(f"LLM title ({event_type}): {title}")
         return title
 
     except Exception as e:

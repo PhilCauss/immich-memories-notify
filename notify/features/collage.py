@@ -20,6 +20,7 @@ from ..immich import (
     get_top_persons,
     upload_collage_to_album,
 )
+from ..llm import generate_title
 from ..ntfy import send_single_notification
 
 
@@ -292,15 +293,30 @@ def generate_weekly_collage(
         if len(person_names) > 3:
             names_str += f" +{len(person_names) - 3} more"
 
-        title_templates = config.get("collage_titles", [])
-        if title_templates:
-            title_template = random.choice(title_templates)
-            try:
-                title = title_template.format(names=names_str)
-            except (KeyError, ValueError, IndexError):
-                title = "Weekly Highlights"
+        # Build title: try LLM first, fall back to templates
+        llm_title = None
+        collage_context = {"person_names": names_str}
+        try:
+            llm_title = generate_title(
+                collage_bytes, collage_context, event_type="weekly_collage", config=None
+            )
+            if llm_title:
+                logger.info(f"  [Collage] Using LLM title: {llm_title}")
+        except Exception as e:
+            logger.info(f"LLM title generation failed for weekly collage: {e}")
+
+        if llm_title:
+            title = llm_title
         else:
-            title = "Weekly Highlights"
+            title_templates = config.get("collage_titles", [])
+            if title_templates:
+                title_template = random.choice(title_templates)
+                try:
+                    title = title_template.format(names=names_str)
+                except (KeyError, ValueError, IndexError):
+                    title = "Weekly Highlights"
+            else:
+                title = "Weekly Highlights"
         if test_mode:
             title = "[TEST] " + title
 
