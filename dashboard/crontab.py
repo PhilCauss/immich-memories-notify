@@ -214,7 +214,13 @@ def generate_crontab(config_path: str = "/app/config.yaml"):
     with open("/etc/crontabs/root", "w") as f:
         for i, w in enumerate(windows, 1):
             h, m = w.get("start", "08:00").split(":")
-            f.write(f"{int(m)} {int(h)} * * * {prefix} && python -m notify >> /proc/1/fd/1 2>&1\n")
+            # Calculate window duration in minutes
+            start_h, start_min = map(int, w.get("start", "08:00").split(":"))
+            end_h, end_min = map(int, w.get("end", "09:00").split(":"))
+            duration_minutes = (end_h * 60 + end_min - start_h * 60 - start_min) % (24 * 60)
+            if duration_minutes <= 0:
+                duration_minutes = 60
+            f.write(f"{int(m)} {int(h)} * * * {prefix} && python -m notify --window-duration {duration_minutes} >> /proc/1/fd/1 2>&1\n")
         f.write(f"0 6 * * * {prefix} && python -m notify --check-updates >> /proc/1/fd/1 2>&1\n")
 
 

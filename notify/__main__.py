@@ -795,10 +795,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python -m notify                  # Run all notification windows with chance-based triggers
-  python -m notify --test           # Test mode (minimal delays, use any date)
-  python -m notify --dry-run        # Preview without sending
-  python -m notify --date 2024-06-15 # Run against a specific date
+  python -m notify --window-duration 60              # Single run with 60-minute window
+  python -m notify --test --window-duration 60       # Test mode
+  python -m notify --dry-run --window-duration 60    # Preview without sending
+  python -m notify --date 2024-06-15 --window-duration 60  # Specific date
         """,
     )
     parser.add_argument("--config", default="config.yaml", help="Path to config file")
@@ -817,6 +817,12 @@ Examples:
         help="Skip random delays between notifications",
     )
     parser.add_argument("--date", help="Specific date to check (YYYY-MM-DD)")
+    parser.add_argument(
+        "--window-duration",
+        type=int,
+        default=None,
+        help="Window duration in minutes (set by crontab)",
+    )
     args = parser.parse_args()
 
     if args.check_updates:
@@ -865,20 +871,8 @@ Examples:
     if args.dry_run:
         logger.info("Mode:    DRY RUN")
 
-    # Get notification windows
-    notification_windows = settings.get(
-        "notification_windows",
-        [
-            {"start": "08:00", "end": "10:00"},
-            {"start": "12:00", "end": "14:00"},
-            {"start": "16:00", "end": "18:00"},
-            {"start": "19:00", "end": "20:00"},
-        ],
-    )
-
-    logger.info(f"Windows: {len(notification_windows)}")
-    for i, w in enumerate(notification_windows, 1):
-        logger.info(f"  Window {i}: {w['start']} - {w['end']}")
+    if args.window_duration:
+        logger.info(f"Window Duration: {args.window_duration} minutes")
 
     # Load state
     state_file = settings.get("state_file", "state/state.json")
@@ -900,117 +894,103 @@ Examples:
     total_success = 0
     total_users = len(users)
 
-    # Process each notification window
-    for window_idx, window in enumerate(notification_windows, 1):
-        logger.info("-" * 60)
-        logger.info(
-            f"Window {window_idx}/{len(notification_windows)}: {window['start']} - {window['end']}"
-        )
+    logger.info("-" * 60)
+    logger.info("Starting notification processing")
 
-        # Calculate and apply random delay for this window
-        if not args.no_delay and not args.dry_run and not args.test:
-            delay_seconds = calculate_random_delay(
-                window["start"],
-                window["end"],
-                test_mode=args.test,
-            )
-            if delay_seconds > 0:
-                delay_minutes = delay_seconds // 60
-                logger.info(f"Delay: ~{delay_minutes} minutes")
-                time.sleep(delay_seconds)
+    # Calculate and apply random delay based on window duration
+    if args.window_duration and not args.no_delay and not args.dry_run and not args.test:
+        delay_seconds = random.randint(0, args.window_duration * 60)
+        if delay_seconds > 0:
+            delay_minutes = delay_seconds // 60
+            logger.info(f"Delay: ~{delay_minutes} minutes (window: {args.window_duration} min)")
+            time.sleep(delay_seconds)
 
-        window_success = 0
+    for user in users:
+        user_name = user["name"]
+        api_key = user["immich_api_key"]
+        if not api_key:
+            logger.error(f"  [{user_name}] No API key configured")
+            continue
 
-        for user in users:
-            user_name = user["name"]
-            api_key = user["immich_api_key"]
-            if not api_key:
-                logger.error(f"  [{user_name}] No API key configured")
-                continue
-
-            # Fetch memories with retry
-            try:
-                memories = with_retry(
-                    lambda immich_url=config["immich"]["url"], api_key=api_key: (
-                        fetch_memories(immich_url, api_key)
-                    ),
-                    max_attempts=settings["retry"]["max_attempts"],
-                    delay=settings["retry"]["delay_seconds"],
-                    logger=logger,
-                )
-            except Exception as e:
-                logger.error(f"  [{user_name}] Failed to fetch memories: {e}")
-                continue
-
-            # Filter for today
-            todays = filter_todays_memories(memories, target_date)
-
-            # In test mode, find any date with memories
-            if args.test and not todays:
-                for memory in memories[:10]:
-                    show_at = memory.get("showAt", "")
-                    if show_at:
-                        test_date = datetime.strptime(show_at[:10], "%Y-%m-%d").date()
-                        todays = filter_todays_memories(memories, test_date)
-                        if todays:
-                            logger.info(
-                                f"  [{user_name}] Test mode: using date {test_date}"
-                            )
-                            break
-
-            # Parse memories by year
-            parsed = (
-                parse_memories(todays, config["immich"]["url"], api_key)
-                if todays
-                else {"years": [], "by_year": {}}
-            )
-
-            # Fetch top persons
-            try:
-                top_persons = get_top_persons(
-                    config["immich"]["url"],
-                    api_key,
-                    limit=settings.get("top_persons_limit", 5),
-                    logger=logger,
-                )
-            except Exception as e:
-                logger.warning(f"  [{user_name}] Could not fetch top persons: {e}")
-                top_persons = []
-
-            # Try to fire events based on chances
-            results = try_fire_event(
-                user=user,
-                config=config,
-                state=state,
-                target_date=target_date,
-                settings=settings,
-                config_data=config,
-                assets_sent=get_assets_sent_today(state, user_name, target_date),
-                top_persons=top_persons,
-                parsed=parsed,
-                test_mode=args.test,
-                dry_run=args.dry_run,
-                force=False,
+        # Fetch memories with retry
+        try:
+            memories = with_retry(
+                lambda immich_url=config["immich"]["url"], api_key=api_key: (
+                    fetch_memories(immich_url, api_key)
+                ),
+                max_attempts=settings["retry"]["max_attempts"],
+                delay=settings["retry"]["delay_seconds"],
                 logger=logger,
             )
+        except Exception as e:
+            logger.error(f"  [{user_name}] Failed to fetch memories: {e}")
+            continue
 
-            if results:
-                logger.info(
-                    f"  [{user_name}] Sent {len(results)} notification(s) this window"
-                )
-                window_success += 1
+        # Filter for today
+        todays = filter_todays_memories(memories, target_date)
 
-            # Save state after each user to avoid losing progress on crash
-            if not args.dry_run:
-                save_state(state_file, state)
+        # In test mode, find any date with memories
+        if args.test and not todays:
+            for memory in memories[:10]:
+                show_at = memory.get("showAt", "")
+                if show_at:
+                    test_date = datetime.strptime(show_at[:10], "%Y-%m-%d").date()
+                    todays = filter_todays_memories(memories, test_date)
+                    if todays:
+                        logger.info(
+                            f"  [{user_name}] Test mode: using date {test_date}"
+                        )
+                        break
 
-        total_success += window_success
-        logger.info(
-            f"  Window {window_idx}: {window_success}/{total_users} users received notifications"
+        # Parse memories by year
+        parsed = (
+            parse_memories(todays, config["immich"]["url"], api_key)
+            if todays
+            else {"years": [], "by_year": {}}
         )
 
+        # Fetch top persons
+        try:
+            top_persons = get_top_persons(
+                config["immich"]["url"],
+                api_key,
+                limit=settings.get("top_persons_limit", 5),
+                logger=logger,
+            )
+        except Exception as e:
+            logger.warning(f"  [{user_name}] Could not fetch top persons: {e}")
+            top_persons = []
+
+        # Try to fire events based on chances
+        results = try_fire_event(
+            user=user,
+            config=config,
+            state=state,
+            target_date=target_date,
+            settings=settings,
+            config_data=config,
+            assets_sent=get_assets_sent_today(state, user_name, target_date),
+            top_persons=top_persons,
+            parsed=parsed,
+            test_mode=args.test,
+            dry_run=args.dry_run,
+            force=False,
+            logger=logger,
+        )
+
+        if results:
+            logger.info(
+                f"  [{user_name}] Sent {len(results)} notification(s)"
+            )
+            total_success += 1
+
+        # Save state after each user to avoid losing progress on crash
+        if not args.dry_run:
+            save_state(state_file, state)
+
+    logger.info(f"{total_success}/{total_users} users received notifications")
     logger.info("=" * 60)
-    logger.info(f"Complete: processed {len(notification_windows)} window(s)")
+    logger.info("Complete")
     logger.info("=" * 60)
 
     return 0
