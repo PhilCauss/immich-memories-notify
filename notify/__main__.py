@@ -3,11 +3,15 @@ Immich Memories Notify
 ======================
 Sends daily memory notifications to all configured users.
 
+Uses a chance-based trigger system: each event type has a configured
+probability of firing at every notification window.
+
 Usage:
-    python -m notify --slot 1        # Send notifications for slot 1
-    python -m notify --slot 1 --test # Test mode (uses any available date)
-    python -m notify --slot 1 --dry-run # Show what would be sent without sending
-    python -m notify --check-updates # Check GitHub for new releases
+    python -m notify                         # Run all notification windows
+    python -m notify --test                  # Test mode (minimal delays, use any date)
+    python -m notify --dry-run               # Show what would be sent without sending
+    python -m notify --check-updates         # Check GitHub for new releases
+    python -m notify --date 2024-06-15       # Run against a specific date
 """
 
 import argparse
@@ -19,12 +23,10 @@ from datetime import date, datetime
 
 from .config import (
     get_assets_sent_today,
-    get_slots_sent_today,
     is_feature_ready,
     load_config,
     load_state,
     mark_feature_fired,
-    mark_slot_sent,
     save_state,
     setup_logging,
 )
@@ -33,7 +35,10 @@ from .features.birthday import find_birthday_people, prepare_birthday_notificati
 from .features.collage import is_collage_day, process_collage_slot
 from .features.memories import prepare_memory_notification
 from .features.persons import prepare_person_notification
-from .features.then_and_now import find_then_and_now_candidate, prepare_then_and_now_notification
+from .features.then_and_now import (
+    find_then_and_now_candidate,
+    prepare_then_and_now_notification,
+)
 from .features.trip import find_trip_candidate, prepare_trip_notification
 from .immich import (
     fetch_memories,
@@ -46,384 +51,718 @@ from .ntfy import send_single_notification
 from .utils import calculate_random_delay, with_retry
 
 
-def process_user_slot(
-    user: dict,
-    config: dict,
-    state: dict,
-    target_date: date,
-    slot: int,
-    test_mode: bool = False,
-    dry_run: bool = False,
-    force: bool = False,
-    logger: logging.Logger = None,
-) -> dict:
+def try_fire_event(
+    user,
+    config,
+    state,
+    target_date,
+    settings,
+    config_data,
+    assets_sent,
+    top_persons,
+    parsed,
+    test_mode,
+    dry_run,
+    force,
+    logger,
+):
     """
-    Process a single notification slot for a user.
+    Decide which single event type to fire, build it, and send the notification.
 
-    Logic:
-    - If memories exist: slots 1-N send memories (with face preference), last slot sends person photo
-    - If no memories: all slots send person photos
+    Weekly Collage check — if collage day, steals the notification slot
+    (fired exclusively, no other event fires this window).
+    Phase 1 — Determine eligibility and chance for each event type.
+    Phase 2 — Weighted random selection (one winner).
+    Phase 3 — Build and send only the winning event.
 
-    Returns dict with 'success' bool and 'asset_id' if sent.
+    Returns a list of successfully sent notifications (at most one item).
     """
     name = user["name"]
-    api_key = user["immich_api_key"]
-    topic = user["ntfy_topic"]
     ntfy_user = user.get("ntfy_username")
     ntfy_pass = user.get("ntfy_password")
     ntfy_auth = (ntfy_user, ntfy_pass) if ntfy_user and ntfy_pass else None
-    enabled = user.get("enabled", True)
-
-    result = {"success": True, "name": name, "asset_id": None}
-
-    if not enabled:
-        logger.info(f"  [{name}] Skipped (disabled)")
-        return result
-
-    if not api_key:
-        logger.error(f"  [{name}] No API key configured")
-        result["success"] = False
-        return result
-
-    # Check if slot already sent today
-    slots_sent = get_slots_sent_today(state, name, target_date)
-    if not force and not test_mode and slot in slots_sent:
-        logger.info(f"  [{name}] Slot {slot} already sent today, skipping")
-        return result
-
-    immich_url = config["immich"]["url"]
     click_base = config["immich"].get("external_url") or "https://my.immich.app"
-    retry_config = config["settings"]["retry"]
-    messages = config.get("messages", [])
-    person_messages = config.get("person_messages", [])
-    video_messages = config.get("video_messages", [])
-    video_person_messages = config.get("video_person_messages", [])
-    memory_titles = config.get("memory_titles", [])
-    person_titles = config.get("person_titles", [])
-    album_messages = config.get("album_messages", [])
-    video_album_messages = config.get("video_album_messages", [])
-    album_titles = config.get("album_titles", [])
-    settings = config["settings"]
+    trigger_chances = settings.get("trigger_chances", {})
 
-    memory_notifications = settings.get("memory_notifications", 3)
-    person_notifications = settings.get("person_notifications", 1)
-    fallback_notifications = settings.get("fallback_notifications", 3)
-    top_persons_limit = settings.get("top_persons_limit", 5)
-    exclude_recent_days = settings.get("exclude_recent_days", 30)
-    user_album_names = user.get("album_names", [])
-
-    logger.info(f"  [{name}] Processing slot {slot}...")
-
-    # Get assets already sent today to avoid duplicates
-    assets_sent = get_assets_sent_today(state, name, target_date)
-
-    # Fetch memories with retry
-    try:
-        memories = with_retry(
-            lambda: fetch_memories(immich_url, api_key),
-            max_attempts=retry_config["max_attempts"],
-            delay=retry_config["delay_seconds"],
-            logger=logger,
+    # =====================================================================
+    # Weekly Collage — special case: steals the notification slot on collage day
+    # Only fires if it's collage day AND no other event was chosen.
+    # =====================================================================
+    weekly_collage_enabled = settings.get("weekly_collage_enabled", False)
+    is_collage = weekly_collage_enabled and is_collage_day(settings, target_date)
+    collage_ready = False
+    if is_collage:
+        collage_ready = test_mode or is_feature_ready(
+            state, name, "last_collage_date", 1, target_date
         )
-    except Exception as e:
-        logger.error(f"  [{name}] Failed to fetch memories: {e}")
-        result["success"] = False
-        return result
 
-    # Filter for today
-    todays = filter_todays_memories(memories, target_date)
+    # =====================================================================
+    # Phase 1: Determine eligibility + chance for each event type
+    # =====================================================================
+    candidates = []  # list of (event_name, chance, eligible)
 
-    # In test mode, find any date with memories
-    if test_mode and not todays:
-        for memory in memories[:10]:
-            show_at = memory.get("showAt", "")
-            if show_at:
-                test_date = datetime.strptime(show_at[:10], "%Y-%m-%d").date()
-                todays = filter_todays_memories(memories, test_date)
-                if todays:
-                    logger.info(f"  [{name}] Test mode: using date {test_date}")
-                    break
-
-    # Parse memories by year
-    parsed = parse_memories(todays, immich_url, api_key) if todays else {"years": [], "by_year": {}}
-    has_memories = bool(parsed["years"])
-
-    if has_memories:
-        logger.debug(f"  [{name}] Memories: {parsed['total_assets']} assets ({parsed['image_count']} images, {parsed['video_count']} videos)")
-
-    # Fetch all people once (shared by birthday check and top persons)
-    try:
-        all_people = with_retry(
-            lambda: fetch_people(immich_url, api_key),
-            max_attempts=retry_config["max_attempts"],
-            delay=retry_config["delay_seconds"],
-            logger=logger,
-        )
-    except Exception as e:
-        logger.warning(f"  [{name}] Could not fetch people: {e}")
-        all_people = []
-
-    # Get top persons for this user
-    try:
-        top_persons = get_top_persons(immich_url, api_key, limit=top_persons_limit, logger=logger, people=all_people)
-        top_person_ids = {p["id"] for p in top_persons}
-    except Exception as e:
-        logger.warning(f"  [{name}] Could not fetch top persons: {e}")
-        top_persons = []
-        top_person_ids = set()
-
-    # Determine what to send for this slot
-    notification = None
-
-    # Birthday check — takes slot 1 priority
+    # --- Birthday ---
+    birthday_chance = trigger_chances.get("birthday", 1.0)
     birthday_enabled = settings.get("birthday_enabled", True)
-    if birthday_enabled and slot == 1:
-        birthday_messages = config.get("birthday_messages", [])
-        birthday_titles = config.get("birthday_titles", [])
-        try:
-            birthday_people = find_birthday_people(
+    candidates.append(("birthday", birthday_chance, birthday_enabled))
+
+    # --- Memory ---
+    memory_chance = trigger_chances.get("memory", 0.0)
+    candidates.append(("memory", memory_chance, memory_chance > 0 and parsed["years"]))
+
+    # --- Person ---
+    person_chance = trigger_chances.get("person", 0.0)
+    candidates.append(("person", person_chance, person_chance > 0 and top_persons))
+
+    # --- Album ---
+    album_chance = trigger_chances.get("album", 0.0)
+    user_album_names = user.get("album_names", [])
+    candidates.append(("album", album_chance, album_chance > 0 and user_album_names))
+
+    # --- Then & Now ---
+    tan_chance = trigger_chances.get("then_and_now", 0.0)
+    tan_enabled = settings.get("then_and_now_enabled", True)
+    tan_cooldown = settings.get("then_and_now_cooldown_days", 7)
+    tan_ready = test_mode or is_feature_ready(
+        state, name, "last_tan_date", tan_cooldown, target_date
+    )
+    candidates.append(
+        (
+            "then_and_now",
+            tan_chance,
+            tan_enabled and tan_chance > 0 and parsed["years"] and tan_ready,
+        )
+    )
+
+    # --- Trip Highlights ---
+    trip_chance = trigger_chances.get("trip_highlights", 0.0)
+    trip_enabled = settings.get("trip_highlights_enabled", True)
+    trip_cooldown = settings.get("trip_highlights_cooldown_days", 7)
+    trip_ready = test_mode or is_feature_ready(
+        state, name, "last_trip_date", trip_cooldown, target_date
+    )
+    candidates.append(
+        (
+            "trip_highlights",
+            trip_chance,
+            trip_enabled and trip_chance > 0 and parsed["years"] and trip_ready,
+        )
+    )
+
+    # Filter to eligible candidates with non-zero chance
+    eligible = [
+        (name, chance)
+        for name, chance, eligible in candidates
+        if eligible and chance > 0
+    ]
+
+    if not eligible:
+        logger.info(f"  [{name}] No eligible events this window")
+        return []
+
+    # Log eligible events
+    logger.info(f"  [{name}] Eligible events: {[n for n, _ in eligible]}")
+
+    # =====================================================================
+    # Phase 2: Weekly Collage check — steals the notification slot on collage day
+    # If collage day, fire it exclusively (no other event fires this window).
+    # =====================================================================
+    if is_collage and collage_ready:
+        logger.info(f"  [{name}] Collage day — stealing notification slot")
+        collage_results = _fire_weekly_collage(
+            user,
+            config,
+            state,
+            target_date,
+            settings,
+            config_data,
+            test_mode,
+            dry_run,
+            force,
+            ntfy_auth,
+            logger,
+        )
+        if collage_results:
+            mark_feature_fired(state, name, "last_collage_date", target_date)
+        return collage_results
+
+    # =====================================================================
+    # Phase 2b: Weighted random selection — pick ONE winner
+    # =====================================================================
+    event_names, weights = zip(*eligible)
+    chosen = random.choices(event_names, weights=weights, k=1)[0]
+    logger.info(f"  [{name}] Chose: {chosen}")
+
+    # =====================================================================
+    # Phase 3: Build and send only the winning event
+    # =====================================================================
+    results = []
+
+    if chosen == "birthday":
+        results = _fire_birthday(
+            user,
+            config,
+            state,
+            target_date,
+            settings,
+            config_data,
+            assets_sent,
+            ntfy_auth,
+            test_mode,
+            logger,
+        )
+
+    elif chosen == "memory":
+        results = _fire_memory(
+            user,
+            config,
+            state,
+            target_date,
+            settings,
+            config_data,
+            assets_sent,
+            top_persons,
+            parsed,
+            ntfy_auth,
+            test_mode,
+            logger,
+        )
+
+    elif chosen == "person":
+        results = _fire_person(
+            user,
+            config,
+            state,
+            target_date,
+            settings,
+            config_data,
+            assets_sent,
+            top_persons,
+            ntfy_auth,
+            test_mode,
+            logger,
+        )
+
+    elif chosen == "album":
+        results = _fire_album(
+            user,
+            config,
+            state,
+            target_date,
+            settings,
+            config_data,
+            assets_sent,
+            ntfy_auth,
+            test_mode,
+            logger,
+        )
+
+    elif chosen == "then_and_now":
+        results = _fire_then_and_now(
+            user,
+            config,
+            state,
+            target_date,
+            settings,
+            config_data,
+            assets_sent,
+            top_persons,
+            ntfy_auth,
+            test_mode,
+            logger,
+        )
+
+    elif chosen == "trip_highlights":
+        results = _fire_trip_highlights(
+            user,
+            config,
+            state,
+            target_date,
+            settings,
+            config_data,
+            assets_sent,
+            ntfy_auth,
+            test_mode,
+            logger,
+            click_base,
+        )
+
+    return results
+
+
+# =============================================================================
+# Phase 3 helper: Build + send for each event type
+# =============================================================================
+
+
+def _fire_birthday(
+    user,
+    config,
+    state,
+    target_date,
+    settings,
+    config_data,
+    assets_sent,
+    ntfy_auth,
+    test_mode,
+    logger,
+):
+    results = []
+    name = user["name"]
+    immich_url = config["immich"]["url"]
+    api_key = user["immich_api_key"]
+    try:
+        birthday_people = find_birthday_people(
+            immich_url=immich_url,
+            api_key=api_key,
+            target_date=target_date,
+            logger=logger,
+        )
+        if birthday_people:
+            person = random.choice(birthday_people)
+            birthday_messages = config_data.get("birthday_messages", [])
+            birthday_titles = config_data.get("birthday_titles", [])
+            notification = prepare_birthday_notification(
+                birthday_person=person,
+                immich_url=immich_url,
+                api_key=api_key,
+                messages=birthday_messages,
+                test_mode=test_mode,
+                logger=logger,
+                title_templates=birthday_titles,
+                exclude_asset_ids=assets_sent,
+                exclude_days=settings.get("exclude_recent_days", 30),
+            )
+            if notification:
+                success = _send_notification(
+                    user,
+                    notification,
+                    config,
+                    state,
+                    ntfy_auth,
+                    logger,
+                    assets_sent,
+                    target_date,
+                    test_mode,
+                    is_birthday=True,
+                )
+                if success:
+                    results.append(notification)
+        else:
+            logger.info(f"  [{name}] Birthday chosen but no birthday person found")
+    except Exception as e:
+        logger.warning(f"  [{name}] Birthday check failed: {e}")
+    return results
+
+
+def _fire_memory(
+    user,
+    config,
+    state,
+    target_date,
+    settings,
+    config_data,
+    assets_sent,
+    top_persons,
+    parsed,
+    ntfy_auth,
+    test_mode,
+    logger,
+):
+    results = []
+    name = user["name"]
+    immich_url = config["immich"]["url"]
+    api_key = user["immich_api_key"]
+    try:
+        memory_messages = config_data.get("messages", [])
+        memory_titles = config_data.get("memory_titles", [])
+        video_messages = config_data.get("video_messages", [])
+        notification = prepare_memory_notification(
+            parsed=parsed,
+            assets_sent=assets_sent,
+            top_person_ids={p["id"] for p in top_persons},
+            immich_url=immich_url,
+            api_key=api_key,
+            messages=memory_messages,
+            test_mode=test_mode,
+            logger=logger,
+            settings=settings,
+            video_messages=video_messages,
+            target_date=target_date,
+            title_templates=memory_titles,
+        )
+        if notification:
+            success = _send_notification(
+                user,
+                notification,
+                config,
+                state,
+                ntfy_auth,
+                logger,
+                assets_sent,
+                target_date,
+                test_mode,
+            )
+            if success:
+                results.append(notification)
+    except Exception as e:
+        logger.warning(f"  [{name}] Memory notification failed: {e}")
+    return results
+
+
+def _fire_person(
+    user,
+    config,
+    state,
+    target_date,
+    settings,
+    config_data,
+    assets_sent,
+    top_persons,
+    ntfy_auth,
+    test_mode,
+    logger,
+):
+    results = []
+    name = user["name"]
+    immich_url = config["immich"]["url"]
+    api_key = user["immich_api_key"]
+    try:
+        person_messages = config_data.get("person_messages", [])
+        person_titles = config_data.get("person_titles", [])
+        video_person_messages = config_data.get("video_person_messages", [])
+        notification = prepare_person_notification(
+            top_persons=top_persons,
+            assets_sent=assets_sent,
+            immich_url=immich_url,
+            api_key=api_key,
+            exclude_days=settings.get("exclude_recent_days", 30),
+            person_messages=person_messages,
+            test_mode=test_mode,
+            logger=logger,
+            settings=settings,
+            video_person_messages=video_person_messages,
+            title_templates=person_titles,
+        )
+        if notification:
+            success = _send_notification(
+                user,
+                notification,
+                config,
+                state,
+                ntfy_auth,
+                logger,
+                assets_sent,
+                target_date,
+                test_mode,
+            )
+            if success:
+                results.append(notification)
+    except Exception as e:
+        logger.warning(f"  [{name}] Person notification failed: {e}")
+    return results
+
+
+def _fire_album(
+    user,
+    config,
+    state,
+    target_date,
+    settings,
+    config_data,
+    assets_sent,
+    ntfy_auth,
+    test_mode,
+    logger,
+):
+    results = []
+    name = user["name"]
+    immich_url = config["immich"]["url"]
+    api_key = user["immich_api_key"]
+    user_album_names = user.get("album_names", [])
+    try:
+        album_messages = config_data.get("album_messages", [])
+        album_titles = config_data.get("album_titles", [])
+        video_album_messages = config_data.get("video_album_messages", [])
+        notification = prepare_album_notification(
+            album_names=user_album_names,
+            assets_sent=assets_sent,
+            immich_url=immich_url,
+            api_key=api_key,
+            album_messages=album_messages,
+            test_mode=test_mode,
+            logger=logger,
+            settings=settings,
+            video_album_messages=video_album_messages,
+            title_templates=album_titles,
+            target_date=target_date,
+        )
+        if notification:
+            success = _send_notification(
+                user,
+                notification,
+                config,
+                state,
+                ntfy_auth,
+                logger,
+                assets_sent,
+                target_date,
+                test_mode,
+            )
+            if success:
+                results.append(notification)
+    except Exception as e:
+        logger.warning(f"  [{name}] Album notification failed: {e}")
+    return results
+
+
+def _fire_then_and_now(
+    user,
+    config,
+    state,
+    target_date,
+    settings,
+    config_data,
+    assets_sent,
+    top_persons,
+    ntfy_auth,
+    test_mode,
+    logger,
+):
+    results = []
+    name = user["name"]
+    immich_url = config["immich"]["url"]
+    api_key = user["immich_api_key"]
+    try:
+        tan_cooldown = settings.get("then_and_now_cooldown_days", 7)
+        tan_min_gap = settings.get("then_and_now_min_gap", 3)
+        year_range = settings.get("year_range", 5)
+        tan_ready = settings.get("then_and_now_enabled", True) and (
+            test_mode
+            or is_feature_ready(state, name, "last_tan_date", tan_cooldown, target_date)
+        )
+
+        if tan_ready:
+            logger.info(
+                f"  [{name}] Then & Now: checking (cooldown: {tan_cooldown} days)"
+            )
+        else:
+            logger.info(f"  [{name}] Then & Now: on cooldown")
+
+        if tan_ready:
+            user_tan_state = state.get("users", {}).get(name, {})
+            used_persons = user_tan_state.get("tan_persons_used", [])
+            used_pairs = user_tan_state.get("tan_pairs_used", [])
+            candidate = find_then_and_now_candidate(
+                immich_url=immich_url,
+                api_key=api_key,
+                top_persons=top_persons,
+                target_date=target_date,
+                min_gap=tan_min_gap,
+                year_range=year_range,
+                logger=logger,
+                used_person_ids=used_persons,
+                used_pairs=used_pairs,
+            )
+            if candidate:
+                tan_messages = config_data.get("then_and_now_messages", [])
+                tan_titles = config_data.get("then_and_now_titles", [])
+                notification = prepare_then_and_now_notification(
+                    candidate=candidate,
+                    immich_url=immich_url,
+                    api_key=api_key,
+                    messages=tan_messages,
+                    test_mode=test_mode,
+                    logger=logger,
+                    title_templates=tan_titles,
+                )
+                if notification:
+                    thumbnail_override = notification.get("composite_image")
+                    success = _send_notification(
+                        user,
+                        notification,
+                        config,
+                        state,
+                        ntfy_auth,
+                        logger,
+                        assets_sent,
+                        target_date,
+                        test_mode,
+                        thumbnail_override=thumbnail_override,
+                    )
+                    if success:
+                        mark_feature_fired(state, name, "last_tan_date", target_date)
+                        user_state = state.setdefault("users", {}).setdefault(name, {})
+                        person_id = notification.get("person_id", "")
+                        if person_id:
+                            used = user_state.setdefault("tan_persons_used", [])
+                            used.append(person_id)
+                            user_state["tan_persons_used"] = used[-20:]
+                        pair_key = notification.get("tan_pair_key", "")
+                        if pair_key:
+                            pairs = user_state.setdefault("tan_pairs_used", [])
+                            pairs.append(pair_key)
+                            user_state["tan_pairs_used"] = pairs[-50:]
+                        results.append(notification)
+            else:
+                logger.info(f"  [{name}] Then & Now: chosen but no candidate found")
+    except Exception as e:
+        logger.warning(f"  [{name}] Then & Now lookup failed: {e}")
+    return results
+
+
+def _fire_trip_highlights(
+    user,
+    config,
+    state,
+    target_date,
+    settings,
+    config_data,
+    assets_sent,
+    ntfy_auth,
+    test_mode,
+    logger,
+    click_base,
+):
+    results = []
+    name = user["name"]
+    immich_url = config["immich"]["url"]
+    api_key = user["immich_api_key"]
+    try:
+        trip_cooldown = settings.get("trip_highlights_cooldown_days", 7)
+        trip_min_photos = settings.get("trip_highlights_min_photos", 5)
+        year_range = settings.get("year_range", 5)
+        trip_ready = settings.get("trip_highlights_enabled", True) and (
+            test_mode
+            or is_feature_ready(
+                state, name, "last_trip_date", trip_cooldown, target_date
+            )
+        )
+
+        if trip_ready:
+            logger.info(
+                f"  [{name}] Trip Highlights: checking (cooldown: {trip_cooldown} days)"
+            )
+        else:
+            logger.info(f"  [{name}] Trip Highlights: on cooldown")
+
+        if trip_ready:
+            home_cities = user.get("home_cities") or (
+                [user["home_city"]] if user.get("home_city") else []
+            )
+            trip = find_trip_candidate(
                 immich_url=immich_url,
                 api_key=api_key,
                 target_date=target_date,
+                home_cities=home_cities,
+                min_photos=trip_min_photos,
+                year_range=year_range,
                 logger=logger,
-                people=all_people,
             )
-            if birthday_people:
-                person = random.choice(birthday_people)
-                notification = prepare_birthday_notification(
-                    birthday_person=person,
+            if trip:
+                trip_messages = config_data.get("trip_highlights_messages", [])
+                trip_titles = config_data.get("trip_highlights_titles", [])
+                notification = prepare_trip_notification(
+                    trip=trip,
                     immich_url=immich_url,
                     api_key=api_key,
-                    messages=birthday_messages,
+                    messages=trip_messages,
                     test_mode=test_mode,
                     logger=logger,
-                    title_templates=birthday_titles,
-                    exclude_asset_ids=assets_sent,
-                    exclude_days=exclude_recent_days,
+                    title_templates=trip_titles,
+                    click_base=click_base,
                 )
                 if notification:
-                    logger.info(f"  [{name}] Sending birthday notification for {person['name']}")
-        except Exception as e:
-            logger.warning(f"  [{name}] Birthday check failed: {e}")
+                    success = _send_notification(
+                        user,
+                        notification,
+                        config,
+                        state,
+                        ntfy_auth,
+                        logger,
+                        assets_sent,
+                        target_date,
+                        test_mode,
+                        thumbnail_override=notification.get("collage_data"),
+                    )
+                    if success:
+                        mark_feature_fired(state, name, "last_trip_date", target_date)
+                        results.append(notification)
+            else:
+                logger.info(
+                    f"  [{name}] Trip Highlights: chosen but no candidate found"
+                )
+    except Exception as e:
+        logger.warning(f"  [{name}] Trip Highlights failed: {e}")
+    return results
 
-    if has_memories and not notification:
-        # Has memories: slots 1-memory_notifications send memories, rest send person photos
-        total_slots = memory_notifications + person_notifications
 
-        if slot <= memory_notifications:
-            # Check if this is the special slot for Then & Now / Trip Highlights
-            tan_enabled = settings.get("then_and_now_enabled", True)
-            trip_enabled = settings.get("trip_highlights_enabled", True)
-            tan_slot_cfg = settings.get("then_and_now_slot", 0)
-            tan_min_gap = settings.get("then_and_now_min_gap", 3)
-            tan_messages = config.get("then_and_now_messages", [])
-            trip_messages = config.get("trip_highlights_messages", [])
-            tan_titles = config.get("then_and_now_titles", [])
-            trip_titles = config.get("trip_highlights_titles", [])
-            home_cities = user.get("home_cities") or ([user["home_city"]] if user.get("home_city") else [])
-            trip_min_photos = settings.get("trip_highlights_min_photos", 5)
-            year_range = settings.get("year_range", 5)
-
-            is_special_slot = (tan_enabled or trip_enabled) and (
-                tan_slot_cfg == slot or (tan_slot_cfg == 0 and slot == memory_notifications)
+def _fire_weekly_collage(
+    user,
+    config,
+    state,
+    target_date,
+    settings,
+    config_data,
+    test_mode,
+    dry_run,
+    force,
+    ntfy_auth,
+    logger,
+):
+    results = []
+    name = user["name"]
+    try:
+        if is_collage_day(settings, target_date):
+            logger.info(f"  [{name}] Collage: YES (weekly collage day)")
+            result = process_collage_slot(
+                user=user,
+                config=config,
+                state=state,
+                target_date=target_date,
+                test_mode=test_mode,
+                dry_run=dry_run,
+                force=force,
+                logger=logger,
             )
-
-            if is_special_slot:
-                tan_cooldown = settings.get("then_and_now_cooldown_days", 7)
-                trip_cooldown = settings.get("trip_highlights_cooldown_days", 7)
-                tan_ready = tan_enabled and (test_mode or is_feature_ready(state, name, "last_tan_date", tan_cooldown, target_date))
-                trip_ready = trip_enabled and (test_mode or is_feature_ready(state, name, "last_trip_date", trip_cooldown, target_date))
-
-                if tan_ready:
-                    days_info = "never" if not state.get("users", {}).get(name, {}).get("last_tan_date") else f"{state['users'][name]['last_tan_date']}"
-                    logger.info(f"  [{name}] Then & Now ready (last: {days_info}, cooldown: {tan_cooldown} days)")
-                else:
-                    last = state.get("users", {}).get(name, {}).get("last_tan_date", "?")
-                    try:
-                        days_ago = (target_date - date.fromisoformat(last)).days if last != "?" else "?"
-                    except ValueError:
-                        days_ago = "?"
-                    logger.info(f"  [{name}] Then & Now on cooldown (last: {last}, {days_ago} days ago)")
-
-                if trip_ready:
-                    days_info = "never" if not state.get("users", {}).get(name, {}).get("last_trip_date") else f"{state['users'][name]['last_trip_date']}"
-                    logger.info(f"  [{name}] Trip Highlights ready (last: {days_info}, cooldown: {trip_cooldown} days)")
-                else:
-                    last = state.get("users", {}).get(name, {}).get("last_trip_date", "?")
-                    try:
-                        days_ago = (target_date - date.fromisoformat(last)).days if last != "?" else "?"
-                    except ValueError:
-                        days_ago = "?"
-                    logger.info(f"  [{name}] Trip Highlights on cooldown (last: {last}, {days_ago} days ago)")
-
-                # Priority: Trip first, TaN fallback (when both ready)
-                if trip_ready:
-                    try:
-                        trip = find_trip_candidate(
-                            immich_url=immich_url,
-                            api_key=api_key,
-                            target_date=target_date,
-                            home_cities=home_cities,
-                            min_photos=trip_min_photos,
-                            year_range=year_range,
-                            logger=logger,
-                        )
-                        if trip:
-                            notification = prepare_trip_notification(
-                                trip=trip,
-                                immich_url=immich_url,
-                                api_key=api_key,
-                                messages=trip_messages,
-                                test_mode=test_mode,
-                                logger=logger,
-                                title_templates=trip_titles,
-                                click_base=click_base,
-                            )
-                            if notification:
-                                logger.info(f"  [{name}] Sending Trip Highlights "
-                                            f"({trip['city']}, {trip['year']})")
-                    except Exception as e:
-                        logger.warning(f"  [{name}] Trip Highlights failed: {e}")
-
-                if not notification and tan_ready:
-                    try:
-                        user_tan_state = state.get("users", {}).get(name, {})
-                        used_persons = user_tan_state.get("tan_persons_used", [])
-                        used_pairs = user_tan_state.get("tan_pairs_used", [])
-                        candidate = find_then_and_now_candidate(
-                            immich_url=immich_url,
-                            api_key=api_key,
-                            top_persons=top_persons,
-                            target_date=target_date,
-                            min_gap=tan_min_gap,
-                            year_range=year_range,
-                            logger=logger,
-                            used_person_ids=used_persons,
-                            used_pairs=used_pairs,
-                        )
-                        if candidate:
-                            notification = prepare_then_and_now_notification(
-                                candidate=candidate,
-                                immich_url=immich_url,
-                                api_key=api_key,
-                                messages=tan_messages,
-                                test_mode=test_mode,
-                                logger=logger,
-                                title_templates=tan_titles,
-                            )
-                            if notification:
-                                logger.info(f"  [{name}] Sending Then & Now ({candidate['then_year']} → {candidate['now_year']})")
-                    except Exception as e:
-                        logger.warning(f"  [{name}] Then & Now lookup failed: {e}")
-
-            if not notification:
-                # Normal memory notification (fallback or non-special slot)
-                notification = prepare_memory_notification(
-                    parsed=parsed,
-                    slot=slot,
-                    assets_sent=assets_sent,
-                    top_person_ids=top_person_ids,
-                    immich_url=immich_url,
-                    api_key=api_key,
-                    messages=messages,
-                    test_mode=test_mode,
-                    logger=logger,
-                    settings=settings,
-                    video_messages=video_messages,
-                    target_date=target_date,
-                    title_templates=memory_titles,
-                )
-        elif slot <= total_slots:
-            # Person slot — 30% chance of album photo if user has albums configured
-            if user_album_names and random.random() < 0.3:
-                notification = prepare_album_notification(
-                    album_names=user_album_names,
-                    assets_sent=assets_sent,
-                    immich_url=immich_url,
-                    api_key=api_key,
-                    album_messages=album_messages,
-                    test_mode=test_mode,
-                    logger=logger,
-                    settings=settings,
-                    video_album_messages=video_album_messages,
-                    title_templates=album_titles,
-                    target_date=target_date,
-                )
-            if not notification:
-                notification = prepare_person_notification(
-                    top_persons=top_persons,
-                    assets_sent=assets_sent,
-                    immich_url=immich_url,
-                    api_key=api_key,
-                    exclude_days=exclude_recent_days,
-                    person_messages=person_messages,
-                    test_mode=test_mode,
-                    logger=logger,
-                    settings=settings,
-                    video_person_messages=video_person_messages,
-                    title_templates=person_titles,
-                )
+            if result.get("success"):
+                collage_notification = {
+                    "title": "[Collage] Sent",
+                    "has_content": True,
+                }
+                results.append(collage_notification)
         else:
-            logger.info(f"  [{name}] Slot {slot} exceeds configured slots ({total_slots}), skipping")
-            return result
-    elif not notification:
-        # No memories: all slots send person photos
-        if slot <= fallback_notifications:
-            # Person slot — 30% chance of album photo if user has albums configured
-            if user_album_names and random.random() < 0.3:
-                notification = prepare_album_notification(
-                    album_names=user_album_names,
-                    assets_sent=assets_sent,
-                    immich_url=immich_url,
-                    api_key=api_key,
-                    album_messages=album_messages,
-                    test_mode=test_mode,
-                    logger=logger,
-                    settings=settings,
-                    video_album_messages=video_album_messages,
-                    title_templates=album_titles,
-                    target_date=target_date,
-                )
-            if not notification:
-                notification = prepare_person_notification(
-                    top_persons=top_persons,
-                    assets_sent=assets_sent,
-                    immich_url=immich_url,
-                    api_key=api_key,
-                    exclude_days=exclude_recent_days,
-                    person_messages=person_messages,
-                    test_mode=test_mode,
-                    logger=logger,
-                    settings=settings,
-                    video_person_messages=video_person_messages,
-                    title_templates=person_titles,
-                )
-        else:
-            logger.info(f"  [{name}] Slot {slot} exceeds fallback slots ({fallback_notifications}), skipping")
-            return result
+            logger.info(f"  [{name}] Collage: NO (not collage day)")
+    except Exception as e:
+        logger.warning(f"  [{name}] Collage generation failed: {e}")
+    return results
+
+
+def _send_notification(
+    user,
+    notification,
+    config,
+    state,
+    ntfy_auth,
+    logger,
+    assets_sent,
+    target_date,
+    test_mode,
+    thumbnail_override=None,
+    is_birthday=False,
+):
+    """Send a notification and update state."""
+    name = user["name"]
+    result = {"success": True, "name": name, "asset_id": None}
 
     if not notification or not notification.get("has_content"):
-        logger.info(f"  [{name}] No content available for slot {slot}")
-        return result
+        return False
 
-    if dry_run:
-        logger.info(f"  [{name}] [DRY RUN] Would send: {notification['title']} - {notification['message']}")
-        # Log additional details in debug mode
-        if notification.get("location"):
-            logger.debug(f"  [{name}] Location: {notification['location']}")
-        if notification.get("album_name"):
-            logger.debug(f"  [{name}] Album: {notification['album_name']}")
-        if notification.get("is_video"):
-            logger.debug(f"  [{name}] Type: VIDEO")
-        return result
+    if not assets_sent:
+        from .config import get_assets_sent_today
 
-    # Send the notification
-    # For Then & Now, pass composite image as thumbnail (no Immich asset to fetch)
-    thumbnail_override = (
-        notification.get("composite_image") if notification.get("is_then_and_now")
-        else notification.get("collage_data") if notification.get("is_trip")
-        else None
-    )
+        assets_sent = get_assets_sent_today({}, name, target_date)
+
     success = send_single_notification(
         user=user,
         notification=notification,
@@ -434,32 +773,20 @@ def process_user_slot(
     )
 
     if success:
-        logger.info(f"  [{name}] Notification sent for slot {slot}!")
+        logger.info(f"  [{name}] Notification sent!")
         result["asset_id"] = notification.get("asset_id")
-
-        if not test_mode:
-            # Mark slot as sent
-            mark_slot_sent(state, name, target_date, slot, notification.get("asset_id"))
-            # Mark feature cooldowns only after successful send
-            if notification.get("is_trip"):
-                mark_feature_fired(state, name, "last_trip_date", target_date)
-            elif notification.get("is_then_and_now"):
-                mark_feature_fired(state, name, "last_tan_date", target_date)
-                user_state = state.setdefault("users", {}).setdefault(name, {})
-                person_id = notification.get("person_id", "")
-                if person_id:
-                    used = user_state.setdefault("tan_persons_used", [])
-                    used.append(person_id)
-                    user_state["tan_persons_used"] = used[-20:]
-                pair_key = notification.get("tan_pair_key", "")
-                if pair_key:
-                    pairs = user_state.setdefault("tan_pairs_used", [])
-                    pairs.append(pair_key)
-                    user_state["tan_pairs_used"] = pairs[-50:]
+        asset_id = notification.get("asset_id")
+        if asset_id and asset_id not in assets_sent:
+            if "assets_sent_today" not in state.get("users", {}).get(name, {}):
+                state.setdefault("users", {}).setdefault(name, {})
+                state["users"][name]["assets_sent_today"] = []
+            state["users"][name]["assets_sent_today"].append(asset_id)
+        if is_birthday:
+            mark_feature_fired(state, name, "last_birthday_date", target_date)
     else:
         result["success"] = False
 
-    return result
+    return success
 
 
 def main():
@@ -468,31 +795,46 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python -m notify --slot 1          # Send slot 1 notification (with random delay)
-  python -m notify --slot 2 --test   # Test slot 2 (minimal delay)
-  python -m notify --slot 1 --dry-run # Preview slot 1 without sending
-  python -m notify --slot 1 --force   # Force send even if already sent
-  python -m notify --slot 1 --no-delay # Send immediately without random delay
+  python -m notify --window-duration 60              # Single run with 60-minute window
+  python -m notify --test --window-duration 60       # Test mode
+  python -m notify --dry-run --window-duration 60    # Preview without sending
+  python -m notify --date 2024-06-15 --window-duration 60  # Specific date
         """,
     )
     parser.add_argument("--config", default="config.yaml", help="Path to config file")
-    parser.add_argument("--slot", type=int, help="Notification slot number (1, 2, 3, ...)")
-    parser.add_argument("--check-updates", action="store_true", help="Check for new releases on GitHub")
-    parser.add_argument("--test", action="store_true", help="Test mode (minimal delays, use any date)")
-    parser.add_argument("--dry-run", action="store_true", help="Show what would be sent")
-    parser.add_argument("--force", action="store_true", help="Force send even if already sent today")
-    parser.add_argument("--no-delay", action="store_true", help="Skip random delay, send immediately")
+    parser.add_argument(
+        "--check-updates", action="store_true", help="Check for new releases on GitHub"
+    )
+    parser.add_argument(
+        "--test", action="store_true", help="Test mode (minimal delays, use any date)"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would be sent"
+    )
+    parser.add_argument(
+        "--no-delay",
+        action="store_true",
+        help="Skip random delays between notifications",
+    )
     parser.add_argument("--date", help="Specific date to check (YYYY-MM-DD)")
+    parser.add_argument(
+        "--window-duration",
+        type=int,
+        default=None,
+        help="Window duration in minutes (set by crontab)",
+    )
     args = parser.parse_args()
 
     if args.check_updates:
         from .update_check import check_for_updates
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
         logger = logging.getLogger("immich-memories-notify")
         return check_for_updates(config_path=args.config, logger=logger)
-
-    if not args.slot:
-        parser.error("--slot is required (unless using --check-updates)")
 
     # Load config first to get log settings
     try:
@@ -522,53 +864,19 @@ Examples:
     logger.info("Immich Memories Notify")
     logger.info("=" * 60)
     logger.info(f"Date:    {target_date}")
-    logger.info(f"Slot:    {args.slot}")
     logger.info(f"Config:  {args.config}")
 
     if args.test:
         logger.info("Mode:    TEST")
     if args.dry_run:
         logger.info("Mode:    DRY RUN")
-    if args.force:
-        logger.info("Mode:    FORCE")
 
-    # Get notification windows
-    notification_windows = settings.get("notification_windows", [
-        {"start": "08:00", "end": "10:00"},
-        {"start": "12:00", "end": "14:00"},
-        {"start": "16:00", "end": "18:00"},
-        {"start": "19:00", "end": "20:00"},
-    ])
-
-    # Calculate and apply random delay for this slot's window
-    if not args.no_delay and not args.dry_run:
-        if args.slot <= len(notification_windows):
-            window = notification_windows[args.slot - 1]
-            delay_seconds = calculate_random_delay(
-                window["start"],
-                window["end"],
-                test_mode=args.test,
-            )
-
-            if delay_seconds > 0:
-                delay_minutes = delay_seconds // 60
-                logger.info(f"Window:  {window['start']} - {window['end']}")
-                if args.test:
-                    logger.info(f"Delay:   {delay_seconds} seconds (test mode)")
-                else:
-                    logger.info(f"Delay:   ~{delay_minutes} minutes")
-                time.sleep(delay_seconds)
-        else:
-            logger.warning(f"No window configured for slot {args.slot}, sending immediately")
+    if args.window_duration:
+        logger.info(f"Window Duration: {args.window_duration} minutes")
 
     # Load state
     state_file = settings.get("state_file", "state/state.json")
     state = load_state(state_file)
-
-    # Check if this is a collage day
-    collage_day = is_collage_day(settings, target_date)
-    if collage_day:
-        logger.info("Collage: YES (weekly collage day)")
 
     # Get enabled users
     users = [u for u in config.get("users", []) if u.get("enabled", True)]
@@ -578,59 +886,114 @@ Examples:
         logger.warning("No enabled users found in config")
         return 0
 
-    # Determine if this slot is a person-photo slot (eligible for collage replacement)
-    memory_notifications = settings.get("memory_notifications", 3)
-    person_notifications = settings.get("person_notifications", 1)
-    total_slots = memory_notifications + person_notifications
-    is_person_slot = args.slot > memory_notifications and args.slot <= total_slots
+    # Check if today is collage day
+    collage_day = is_collage_day(settings, target_date)
+    if collage_day:
+        logger.info("Collage day: YES")
 
-    # On collage day, replace person-photo slots with collage
-    use_collage_for_slot = collage_day and is_person_slot
+    total_success = 0
+    total_users = len(users)
 
-    # Process each user for this slot
-    success_count = 0
+    logger.info("-" * 60)
+    logger.info("Starting notification processing")
+
+    # Calculate and apply random delay based on window duration
+    if args.window_duration and not args.no_delay and not args.dry_run and not args.test:
+        delay_seconds = random.randint(0, args.window_duration * 60)
+        if delay_seconds > 0:
+            delay_minutes = delay_seconds // 60
+            logger.info(f"Delay: ~{delay_minutes} minutes (window: {args.window_duration} min)")
+            time.sleep(delay_seconds)
 
     for user in users:
-        if use_collage_for_slot:
-            # Send collage instead of person photo for this slot
-            result = process_collage_slot(
-                user=user,
-                config=config,
-                state=state,
-                target_date=target_date,
-                slot=args.slot,
-                test_mode=args.test,
-                dry_run=args.dry_run,
-                force=args.force,
+        user_name = user["name"]
+        api_key = user["immich_api_key"]
+        if not api_key:
+            logger.error(f"  [{user_name}] No API key configured")
+            continue
+
+        # Fetch memories with retry
+        try:
+            memories = with_retry(
+                lambda immich_url=config["immich"]["url"], api_key=api_key: (
+                    fetch_memories(immich_url, api_key)
+                ),
+                max_attempts=settings["retry"]["max_attempts"],
+                delay=settings["retry"]["delay_seconds"],
                 logger=logger,
             )
-            if result.get("success"):
-                success_count += 1
-        else:
-            # Normal notification (memory or person photo)
-            result = process_user_slot(
-                user=user,
-                config=config,
-                state=state,
-                target_date=target_date,
-                slot=args.slot,
-                test_mode=args.test,
-                dry_run=args.dry_run,
-                force=args.force,
+        except Exception as e:
+            logger.error(f"  [{user_name}] Failed to fetch memories: {e}")
+            continue
+
+        # Filter for today
+        todays = filter_todays_memories(memories, target_date)
+
+        # In test mode, find any date with memories
+        if args.test and not todays:
+            for memory in memories[:10]:
+                show_at = memory.get("showAt", "")
+                if show_at:
+                    test_date = datetime.strptime(show_at[:10], "%Y-%m-%d").date()
+                    todays = filter_todays_memories(memories, test_date)
+                    if todays:
+                        logger.info(
+                            f"  [{user_name}] Test mode: using date {test_date}"
+                        )
+                        break
+
+        # Parse memories by year
+        parsed = (
+            parse_memories(todays, config["immich"]["url"], api_key)
+            if todays
+            else {"years": [], "by_year": {}}
+        )
+
+        # Fetch top persons
+        try:
+            top_persons = get_top_persons(
+                config["immich"]["url"],
+                api_key,
+                limit=settings.get("top_persons_limit", 5),
                 logger=logger,
             )
-            if result["success"]:
-                success_count += 1
+        except Exception as e:
+            logger.warning(f"  [{user_name}] Could not fetch top persons: {e}")
+            top_persons = []
+
+        # Try to fire events based on chances
+        results = try_fire_event(
+            user=user,
+            config=config,
+            state=state,
+            target_date=target_date,
+            settings=settings,
+            config_data=config,
+            assets_sent=get_assets_sent_today(state, user_name, target_date),
+            top_persons=top_persons,
+            parsed=parsed,
+            test_mode=args.test,
+            dry_run=args.dry_run,
+            force=False,
+            logger=logger,
+        )
+
+        if results:
+            logger.info(
+                f"  [{user_name}] Sent {len(results)} notification(s)"
+            )
+            total_success += 1
 
         # Save state after each user to avoid losing progress on crash
         if not args.dry_run:
             save_state(state_file, state)
 
+    logger.info(f"{total_success}/{total_users} users received notifications")
     logger.info("=" * 60)
-    logger.info(f"Complete: {success_count}/{len(users)} users successful")
+    logger.info("Complete")
     logger.info("=" * 60)
 
-    return 0 if success_count == len(users) else 1
+    return 0
 
 
 if __name__ == "__main__":

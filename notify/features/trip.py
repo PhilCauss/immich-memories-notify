@@ -15,6 +15,7 @@ from ..immich import (
     get_or_create_album,
     upload_collage_to_album,
 )
+from ..llm import generate_title
 from .collage import cover_crop_image
 
 
@@ -243,7 +244,26 @@ def prepare_trip_notification(
     else:
         message = f"{gap} years ago in {city}, {country}!"
 
-    if title_templates:
+    # Build title: try LLM first, fall back to templates
+    llm_title = None
+    trip_context = {
+        "city": city,
+        "country": country,
+        "year": str(year),
+        "gap": str(gap),
+    }
+    try:
+        llm_title = generate_title(
+            collage, trip_context, event_type="trip_highlights", config=None
+        )
+        if llm_title:
+            _logger.info(f"  [Trip] Using LLM title: {llm_title}")
+    except Exception as e:
+        _logger.info(f"LLM title generation failed for Trip Highlights: {e}")
+
+    if llm_title:
+        title = llm_title
+    elif title_templates:
         title_template = random.choice(title_templates)
         try:
             title = title_template.format(city=city, country=country, year=year, gap=gap)

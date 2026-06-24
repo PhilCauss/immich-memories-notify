@@ -74,7 +74,7 @@ def load_config(config_path: str = "config.yaml") -> dict:
         raise FileNotFoundError(f"Config file not found: {config_path}")
 
     with open(path) as f:
-        config = yaml.safe_load(f)
+        config: dict = yaml.safe_load(f)
 
     # Expand environment variables
     config = expand_env_vars(config)
@@ -89,7 +89,6 @@ def load_config(config_path: str = "config.yaml") -> dict:
     settings.setdefault("log_level", "INFO")
     settings.setdefault("then_and_now_enabled", True)
     settings.setdefault("then_and_now_min_gap", 3)
-    settings.setdefault("then_and_now_slot", 0)  # 0 = auto (last memory slot)
     settings.setdefault("trip_highlights_enabled", True)
     settings.setdefault("then_and_now_cooldown_days", 7)
     settings.setdefault("trip_highlights_cooldown_days", 7)
@@ -173,48 +172,9 @@ def mark_as_sent(state: dict, user_name: str, target_date: date):
     state["users"][user_name]["last_sent_time"] = datetime.now().isoformat()
 
 
-def get_slots_sent_today(state: dict, user_name: str, target_date: date) -> list:
-    """Get list of slot numbers already sent today for user."""
-    date_str = target_date.isoformat()
-    user_state = state.get("users", {}).get(user_name, {})
-    if user_state.get("slots_date") != date_str:
-        return []
-    return user_state.get("slots_sent", [])
-
-
-def mark_slot_sent(state: dict, user_name: str, target_date: date, slot: int, asset_id: str = None):
-    """Mark a specific slot as sent for user."""
-    date_str = target_date.isoformat()
-    if "users" not in state:
-        state["users"] = {}
-    if user_name not in state["users"]:
-        state["users"][user_name] = {}
-
-    user_state = state["users"][user_name]
-
-    # Reset if new day
-    if user_state.get("slots_date") != date_str:
-        user_state["slots_date"] = date_str
-        user_state["slots_sent"] = []
-        user_state["assets_sent_today"] = []
-
-    if slot not in user_state["slots_sent"]:
-        user_state["slots_sent"].append(slot)
-
-    if asset_id and asset_id not in user_state.get("assets_sent_today", []):
-        if "assets_sent_today" not in user_state:
-            user_state["assets_sent_today"] = []
-        user_state["assets_sent_today"].append(asset_id)
-
-    user_state["last_slot_time"] = datetime.now().isoformat()
-
-
 def get_assets_sent_today(state: dict, user_name: str, target_date: date) -> set:
     """Get set of asset IDs already sent today for user."""
-    date_str = target_date.isoformat()
     user_state = state.get("users", {}).get(user_name, {})
-    if user_state.get("slots_date") != date_str:
-        return set()
     return set(user_state.get("assets_sent_today", []))
 
 

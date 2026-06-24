@@ -106,7 +106,7 @@ def prepare_person_notification(
     video_emoji = settings.get("video_emoji", False)
 
     llm_title = None
-    if not is_video and asset_id:
+    if asset_id:
         try:
             image_bytes = fetch_thumbnail(
                 immich_url=immich_url,
@@ -115,10 +115,12 @@ def prepare_person_notification(
                 timeout=30,
                 size="preview",
             )
-            llm_title = generate_title(image_bytes, person_name, config=None)
+            llm_title = generate_title(
+                image_bytes, {"person_name": person_name}, event_type="person", config=None
+            )
         except Exception as e:
             if logger:
-                logger.debug(f"LLM title generation failed for {person_name}: {e}")
+                logger.info(f"LLM title generation failed for {person_name}: {e}")
 
     if llm_title:
         title = llm_title
@@ -128,10 +130,14 @@ def prepare_person_notification(
             title = title_template.format(person_name=person_name)
         except (KeyError, ValueError, IndexError):
             title = f"A memory with {person_name}"
+        if logger:
+            logger.info(f"  [Person] Using template title for {person_name}: {title}")
     else:
         title = f"A memory with {person_name}"
+        if logger:
+            logger.info(f"  [Person] Using fallback title for {person_name}: {title}")
     if is_video and video_emoji:
-        title = f"\U0001F3AC {title}"
+        title = f"\U0001f3ac {title}"
 
     if test_mode:
         title = "[TEST] " + title

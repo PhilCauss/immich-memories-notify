@@ -11,7 +11,6 @@ from ..utils import format_location, get_primary_album
 
 def prepare_memory_notification(
     parsed: dict,
-    slot: int,
     assets_sent: set,
     top_person_ids: set,
     immich_url: str,
@@ -24,7 +23,7 @@ def prepare_memory_notification(
     target_date: date = None,
     title_templates: list = None,
 ) -> Optional[dict]:
-    """Prepare a memory notification for a specific slot, preferring faces."""
+    """Prepare a memory notification, preferring faces."""
     years = parsed["years"]
     if not years:
         return None
@@ -34,9 +33,8 @@ def prepare_memory_notification(
     if video_messages is None:
         video_messages = []
 
-    # Select year for this slot (cycle through available years)
-    year_index = (slot - 1) % len(years)
-    year = years[year_index]
+    # Select a random year from available years
+    year = random.choice(years)
     year_data = parsed["by_year"].get(year, {})
     assets = year_data.get("assets", [])
 
